@@ -1,7 +1,6 @@
 from dataclasses import dataclass
 import struct
-from constants import HEADER_SIZE, MAX_PAYLOAD, VERSION
-HEADER = struct.Struct("!BBBIIHIH")
+from common.constants import HEADER_SIZE, MAX_PAYLOAD, VERSION, HEADER
 class PacketError(ValueError):
     pass
 
@@ -77,6 +76,3 @@ def decode(data: bytes) -> Packet:
         payload=payload
     )
 
-p = Packet(type=1, conn_id=7, pkt_num=1, stream_id=2, seq=0, payload=b"Hello, World!", flags=0)
-print(encode(p).hex(" "))
-print(decode(encode(p)))
