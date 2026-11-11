@@ -1,4 +1,10 @@
 from enum import IntEnum, IntFlag
+from typing import Final
+
+VERSION: Final = 1
+HEADER_SIZE: Final = 19
+MAX_DATAGRAM: Final = 1200
+MAX_PAYLOAD: Final = MAX_DATAGRAM - HEADER_SIZE
 
 class PacketType(IntEnum):
     HELLO = 1
