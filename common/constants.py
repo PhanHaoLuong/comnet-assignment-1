@@ -3,6 +3,7 @@
 import struct
 from enum import IntEnum, IntFlag
 from typing import Final
+import re
 
 VERSION: Final = 1
 HEADER_SIZE: Final = 19
@@ -10,6 +11,19 @@ MAX_DATAGRAM: Final = 1200
 MAX_PAYLOAD: Final = MAX_DATAGRAM - HEADER_SIZE
 HEADER: Final = struct.Struct("!BBBIIHIH")
 
+# --- accounts / auth -------------------------------------------------------
+USERNAME_PATTERN = re.compile(r"[a-z0-9_]{3,20}")
+MAX_PASSWORD_BYTES = 128            # UTF-8 bytes; stops oversized-LOGIN abuse
+ 
+SCRYPT_N = 2**14
+SCRYPT_R = 8
+SCRYPT_P = 1
+SCRYPT_MAXMEM = 64 * 1024 * 1024
+SALT_SIZE = 16
+HASH_SIZE = 32
+ 
+ACCOUNTS_FILE = "data/accounts.json"
+# ---------------------------------------------------------------------------
 
 class PacketType(IntEnum):
     HELLO = 1
