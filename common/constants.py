@@ -41,6 +41,7 @@ HELLO_RETRY_COUNT: Final = 5
 HELLO_RETRY_INTERVAL: Final = 0.5  # seconds
 PING_INTERVAL_S: Final = 5.0       # heartbeat period
 PEER_DEAD_S: Final = 15.0          # silence before closing
+UNAUTH_TIMEOUT_S: Final = 30.0     # connected but never logged in
 PING_TOKEN: Final = struct.Struct("!Q")
 INITIAL_RTO: Final = 0.3           # seconds (spec: 300 ms)
 RTO_MIN: Final = 0.05              # seconds
