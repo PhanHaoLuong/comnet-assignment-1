@@ -161,20 +161,18 @@ class TrackerServer:
 # ------------------------------------------------------------------------ main
 
 def _resolve_auth(dev_auth: bool) -> Authenticator:
-    if not dev_auth:
-        try:
-            from app.auth import authenticate  # type: ignore
-            return authenticate
-        except ImportError:
-            logger.warning(
-                "app.auth not found; falling back to dev auth (password == 'pw')"
-            )
+    if dev_auth:
+        async def dev_authenticate(username: str, password: str) -> bool:
+            return password == "pw"
+        return dev_authenticate
 
-    async def dev_authenticate(username: str, password: str) -> bool:
-        return password == "pw"
-
-    return dev_authenticate
-
+    from app import auth
+    store = auth.configure()       # raises if the accounts file is corrupt
+    logger.info("loaded %d account(s) from %s", len(store.accounts), store.path)
+    if not store.accounts:
+        logger.warning("no accounts: nobody can log in. "
+                       "Create one with: python3 -m app.admin add <name>")
+    return auth.authenticate
 
 async def _amain(args) -> None:
     server = TrackerServer(
