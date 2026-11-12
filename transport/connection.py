@@ -27,6 +27,9 @@ from common.constants import (
     HELLO_ACK,
     HELLO_RETRY_COUNT,
     HELLO_RETRY_INTERVAL,
+    PEER_DEAD_S,
+    PING_INTERVAL_S,
+    PING_TOKEN,
     Flags,
     PacketType,
 )
@@ -61,13 +64,15 @@ class ConnectionState(Enum):
 
 class Connection:
     def __init__(self, endpoint: UdpEndpoint, peer_addr: Addr, conn_id: int,
-                 is_initiator: bool):
+                 is_initiator: bool, ping_interval: float = PING_INTERVAL_S,
+                 dead_timeout: float = PEER_DEAD_S):
         self.endpoint = endpoint
         self.peer_addr = peer_addr
         self.conn_id = conn_id                 # our local ID; peer puts it in headers
         self.peer_conn_id = None               # their local ID; we put it in headers
         self.is_initiator = is_initiator
         self.next_pkt_num = 0
+        self.loop = asyncio.get_running_loop()
         self.state = ConnectionState.NEW
         self._established = None
         self.peer_name = None
@@ -78,6 +83,12 @@ class Connection:
 
         self._close_callbacks: list[Callable[["Connection"], None]] = []
         self._stream_callbacks: list[Callable[[Stream], None]] = []
+
+        self.ping_interval = ping_interval
+        self.dead_timeout = dead_timeout
+        self.last_seen = 0.0
+        self._ping_token = 0
+        self._keepalive_task: Optional[asyncio.Task] = None
 
     # -- public callbacks ---------------------------------------------------
 
@@ -116,6 +127,37 @@ class Connection:
     def _setup_control_stream(self) -> None:
         if CONTROL_STREAM_ID not in self.streams:
             self.control_stream = self._new_stream(CONTROL_STREAM_ID)
+
+    # -- keepalive ----------------------------------------------------------
+
+    def _start_keepalive(self) -> None:
+        self.last_seen = self.loop.time()
+        if self._keepalive_task is None or self._keepalive_task.done():
+            self._keepalive_task = self.loop.create_task(self._keepalive())
+
+    async def _keepalive(self) -> None:
+        """PING every interval; close after dead_timeout of silence."""
+        try:
+            while self.state is ConnectionState.ESTABLISHED:
+                await asyncio.sleep(self.ping_interval)
+                if self.state is not ConnectionState.ESTABLISHED:
+                    return
+                if self.loop.time() - self.last_seen > self.dead_timeout:
+                    logger.debug("peer %s timed out", self.peer_addr)
+                    self.close()
+                    return
+                self._ping_token = (self._ping_token + 1) & 0xFFFFFFFFFFFFFFFF
+                try:
+                    self._transmit(
+                        PacketType.PING,
+                        PING_TOKEN.pack(self._ping_token),
+                        stream_id=CONTROL_STREAM_ID,
+                    )
+                except Exception:
+                    self.close()
+                    return
+        except asyncio.CancelledError:
+            raise
 
     # -- transport API used by Stream ---------------------------------------
 
@@ -165,6 +207,7 @@ class Connection:
                     timeout=HELLO_RETRY_INTERVAL,
                 )
                 self._setup_control_stream()
+                self._start_keepalive()
                 return
             except asyncio.TimeoutError:
                 continue
@@ -179,6 +222,7 @@ class Connection:
         self.peer_name = name
         self.state = ConnectionState.ESTABLISHED
         self._setup_control_stream()
+        self._start_keepalive()
         self._transmit(
             PacketType.HELLO_ACK,
             HELLO_ACK.pack(self.conn_id, b"\x00" * 32, b"\x00" * 16),
@@ -194,6 +238,17 @@ class Connection:
             return
 
         if self.state is ConnectionState.ESTABLISHED:
+            self.last_seen = self.loop.time()
+
+            if pkt.type == PacketType.PING:
+                if len(pkt.payload) == PING_TOKEN.size:
+                    self._transmit(
+                        PacketType.PONG, pkt.payload, stream_id=CONTROL_STREAM_ID
+                    )
+                return
+            if pkt.type == PacketType.PONG:
+                return
+
             if pkt.type == PacketType.DATA:
                 self._stream_for_data(pkt.stream_id).on_data(pkt)
             elif pkt.type == PacketType.ACK:
@@ -238,6 +293,9 @@ class Connection:
 
     def _teardown(self) -> None:
         self.state = ConnectionState.CLOSED
+        if self._keepalive_task is not None:
+            self._keepalive_task.cancel()
+            self._keepalive_task = None
         for stream in list(self.streams.values()):
             stream.close()
         self.streams.clear()
@@ -275,11 +333,15 @@ class Connection:
 
 
 class ConnectionManager:
-    def __init__(self, on_connection: Optional[Callable[[Connection], None]] = None):
+    def __init__(self, on_connection: Optional[Callable[[Connection], None]] = None,
+                 ping_interval: float = PING_INTERVAL_S,
+                 dead_timeout: float = PEER_DEAD_S):
         self.connections: dict[int, Connection] = {}
         self.by_hello: dict[tuple[Addr, int], Connection] = {}
         self.on_connection = on_connection or (lambda conn: None)
         self.endpoint: Optional[UdpEndpoint] = None
+        self.ping_interval = ping_interval
+        self.dead_timeout = dead_timeout
 
     @property
     def address(self) -> Optional[Addr]:
@@ -313,6 +375,8 @@ class ConnectionManager:
             peer_addr,
             self._generate_conn_id(),
             is_initiator=True,
+            ping_interval=self.ping_interval,
+            dead_timeout=self.dead_timeout,
         )
         self._register(conn)
         try:
@@ -349,6 +413,8 @@ class ConnectionManager:
                     addr,
                     self._generate_conn_id(),
                     is_initiator=False,
+                    ping_interval=self.ping_interval,
+                    dead_timeout=self.dead_timeout,
                 )
                 self.by_hello[key] = conn
                 self._register(conn)

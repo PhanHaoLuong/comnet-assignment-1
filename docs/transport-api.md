@@ -82,6 +82,7 @@ conn.on_close(lambda conn: tracker_remove(conn))
 - message boundaries are preserved; empty messages are valid
 - flow control: the sender respects the receiver's advertised window
 - retransmission: RTO and fast retransmit (3 duplicate ACKs / SACK evidence)
+- liveness: PING every 5 s; a silent peer is closed after 15 s and `on_close` fires
 - close: both `recv()` and a blocked `send()` wake with `ConnectionError`
 
 ## Useful fields
@@ -91,14 +92,11 @@ conn.on_close(lambda conn: tracker_remove(conn))
 `conn.conn_id` — local connection ID (not needed by app code).
 `mgr.address` — local `[ip, port]` (use for `LOGIN_OK.your_addr`).
 
-## Caveats before the final demo
+## Caveat before the final demo
 
-1. **No transport keepalive yet.** `on_close` fires on FIN or local close, but
-   not when a peer is silently killed. The tracker must either implement an
-   app-level heartbeat/sweeper for now, or wait for transport PING/PONG.
-2. **No congestion control (AIMD).** Multiple big streams can oversubscribe
-   the shared socket; a small message can wait an RTO if its single packet is
-   lost. Fine for the demo; documented as future work.
+**No congestion control (AIMD).** Multiple big streams can oversubscribe the
+shared socket; a small message can wait an RTO if its single packet is lost.
+Fine for the demo; documented as future work.
 
 ## Do not
 
