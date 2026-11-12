@@ -125,7 +125,7 @@ async def authenticate(username: str, password: str) -> bool:
 
 - username already lowercase/validated
 - return `False` for bad credentials; raise only on storage failure
-- never log passwords; hash with scrypt/PBKDF2; run CPU work off the loop
+- never log passwords; hash with PBKDF2-HMAC-SHA256 (600k iterations); run CPU work off the loop
 - auth does not send messages, know JSON, or enforce uniqueness
 
 The tracker calls it from `app/tracker_server.py`. Until it exists, run the

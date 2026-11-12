@@ -13,18 +13,16 @@ from typing import Optional
 from common.constants import (
     HASH_SIZE,
     MAX_PASSWORD_BYTES,
+    PBKDF2_ALGORITHM,
+    PBKDF2_ITERATIONS,
     SALT_SIZE,
-    SCRYPT_MAXMEM,
-    SCRYPT_N,
-    SCRYPT_P,
-    SCRYPT_R,
     USERNAME_PATTERN,
     ACCOUNTS_FILE,
 )
 
 logger = logging.getLogger(__name__)
 
-# Used to burn the same scrypt time for unknown users (see authenticate()).
+# Used to burn the same PBKDF2 time for unknown users (see authenticate()).
 _DUMMY_SALT = bytes(SALT_SIZE)
 _DUMMY_HASH = bytes(HASH_SIZE)
 
@@ -57,14 +55,13 @@ def is_valid_password(password: object) -> bool:
         return False
 
 
-def _scrypt(password: str, salt: bytes) -> bytes:
-    return hashlib.scrypt(
+def _pbkdf2(password: str, salt: bytes,
+            iterations: int = PBKDF2_ITERATIONS) -> bytes:
+    return hashlib.pbkdf2_hmac(
+        "sha256",
         password.encode("utf-8"),
-        salt=salt,
-        n=SCRYPT_N,
-        r=SCRYPT_R,
-        p=SCRYPT_P,
-        maxmem=SCRYPT_MAXMEM,
+        salt,
+        iterations,
         dklen=HASH_SIZE,
     )
 
@@ -73,17 +70,22 @@ def hash_password(password: str) -> tuple[bytes, bytes]:
     if not is_valid_password(password):
         raise ValueError("invalid password")
     salt = os.urandom(SALT_SIZE)
-    return salt, _scrypt(password, salt)
+    return salt, _pbkdf2(password, salt)
 
 
-def verify_password(password: object, salt: object, expected_hash: object) -> bool:
+def verify_password(password: object, salt: object, expected_hash: object,
+                    iterations: int = PBKDF2_ITERATIONS) -> bool:
     if not is_valid_password(password):
         return False
     if not isinstance(salt, bytes) or len(salt) != SALT_SIZE:
         return False
     if not isinstance(expected_hash, bytes) or len(expected_hash) != HASH_SIZE:
         return False
-    return hmac.compare_digest(_scrypt(password, salt), expected_hash)
+    if not isinstance(iterations, int) or iterations < 1:
+        return False
+    return hmac.compare_digest(
+        _pbkdf2(password, salt, iterations), expected_hash
+    )
 
 
 # =================== account records ========================================
@@ -94,10 +96,8 @@ def create_account_record(username: str, password: str) -> dict:
     salt, password_hash = hash_password(password)
     return {
         "username": username,
-        "algorithm": "scrypt",
-        "scrypt_n": SCRYPT_N,
-        "scrypt_r": SCRYPT_R,
-        "scrypt_p": SCRYPT_P,
+        "algorithm": PBKDF2_ALGORITHM,
+        "iterations": PBKDF2_ITERATIONS,
         "salt": base64.b64encode(salt).decode("ascii"),
         "password_hash": base64.b64encode(password_hash).decode("ascii"),
     }
@@ -173,14 +173,11 @@ def load_accounts(file_path: str) -> dict:
         if key != username:
             raise ValueError("account key does not match username")
 
-        if record.get("algorithm") != "scrypt":
+        if record.get("algorithm") != PBKDF2_ALGORITHM:
             raise ValueError("unsupported password hashing algorithm")
-        if (
-            record.get("scrypt_n") != SCRYPT_N
-            or record.get("scrypt_r") != SCRYPT_R
-            or record.get("scrypt_p") != SCRYPT_P
-        ):
-            raise ValueError("unsupported scrypt parameters")
+        iterations = record.get("iterations")
+        if not isinstance(iterations, int) or iterations < 1:
+            raise ValueError("invalid PBKDF2 iteration count")
 
         try:
             salt = base64.b64decode(record["salt"], validate=True)
@@ -237,9 +234,10 @@ def check_credentials(accounts: dict, username: object, password: object) -> boo
     try:
         salt = base64.b64decode(record["salt"], validate=True)
         expected = base64.b64decode(record["password_hash"], validate=True)
+        iterations = record["iterations"]
     except (KeyError, ValueError, TypeError):
         return False
-    return verify_password(password, salt, expected)
+    return verify_password(password, salt, expected, iterations)
 
 _store: Optional[AccountStore] = None
 _store_lock = threading.Lock()
