@@ -8,6 +8,8 @@ logger = logging.getLogger(__name__)
 Addr = tuple[str, int]
 
 class UdpEndpoint(asyncio.DatagramProtocol):
+    # loss/delay_ms/reorder/seed are reserved for the layer-0 simulator.
+    # They are accepted now so callers do not change when it lands.
     def __init__(self, on_datagram: Callable[[bytes, Addr], None], *, loss: float = 0.0, delay_ms: float = 0.0, reorder: float = 0.0, seed: Optional[int] = None):
         self.on_datagram = on_datagram
         self.transport = None
