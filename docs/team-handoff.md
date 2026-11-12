@@ -13,8 +13,10 @@ file without agreement.
 | `app/messages.py` | done: JSON schema + validation |
 | `app/tracker.py` | done: roster, presence, `gseq`, history |
 | `app/tracker_server.py` | done: tracker daemon |
-| `app/auth.py` | in progress |
-| `client/daemon.py`, `client/gateway.py`, `web/` | **not started** |
+| `app/auth.py` | done: PBKDF2-HMAC-SHA256 |
+| `client/daemon.py` | done: login, peers, chat events, state, stop |
+| `client/gateway.py` | done: HTTP/1.1 + SSE bridge |
+| `web/` | placeholder `index.html`; Auth owns the real shell + login page |
 | `app/files.py`, `app/peer.py` | **not started** |
 | `transport/crypto.py` | **not started** |
 
@@ -22,7 +24,9 @@ Useful references:
 
 - `docs/transport-api.md` — the transport surface for app code
 - `docs/auth-tracker-boundary.md` — auth ↔ tracker contract
+- `docs/gateway-api.md` — HTTP/SSE contract for the web UI
 - `scripts/discovery_demo.py` — end-to-end tracker test
+- `scripts/gateway_demo.py` — HTTP/SSE gateway test
 - `scripts/public_api_demo.py` — smallest client/tracker example
 
 ## Ownership map
@@ -33,8 +37,8 @@ shared client code.
 | Owner | Files |
 |---|---|
 | **Lương** (transport + tracker) | `common/**`, `transport/connection.py`, `transport/stream.py`, `app/messages.py`, `app/tracker.py`, `app/tracker_server.py`, `docs/**` |
-| **Lương** (client integration) | `client/daemon.py`, `client/gateway.py`, `web/index.html`, `web/app.js`, `web/style.css` |
-| **Auth** | `app/auth.py`, `web/login.js` |
+| **Lương** (client integration) | `client/daemon.py`, `client/gateway.py` |
+| **Auth** (auth + web UI lead) | `app/auth.py`, `web/index.html`, `web/app.js`, `web/style.css`, `web/login.js` |
 | **Crypto** | `transport/crypto.py` (integration into `connection.py` is reviewed by Lương) |
 | **Chat** | `web/chat.js`, chat-related methods/events in `client/daemon.py` (via integration owner), `app/chat.py` if needed |
 | **Files** | `app/files.py`, `app/peer.py`, `web/files.js` |
@@ -42,8 +46,10 @@ shared client code.
 If `client/daemon.py` + `client/gateway.py` are reassigned, move the whole
 block to one person. Never split that file pair.
 
-UI is not a separate owner: the shell belongs to integration, and each feature
-owner adds their page (`login.js`, `chat.js`, `files.js`).
+The Auth owner now owns the web shell and login page. Chat and Files add
+separate JS modules (`web/chat.js`, `web/files.js`) and coordinate any
+`web/app.js` change with Auth. `client/gateway.py` changes still go through
+Lương.
 
 ## Shared contracts
 
@@ -125,7 +131,7 @@ async def authenticate(username: str, password: str) -> bool:
 
 - username already lowercase/validated
 - return `False` for bad credentials; raise only on storage failure
-- never log passwords; hash with scrypt/PBKDF2; run CPU work off the loop
+- never log passwords; hash with PBKDF2-HMAC-SHA256 (600k iterations); run CPU work off the loop
 - auth does not send messages, know JSON, or enforce uniqueness
 
 The tracker calls it from `app/tracker_server.py`. Until it exists, run the
@@ -149,6 +155,7 @@ Event kinds:
 |---|---|
 | `status` | `{connected, username, tracker}` |
 | `peers` | `{peers: {username: info}}` |
+| `history` | `{history: [chat entries]}` |
 | `chat` | `{message: CHAT dict}` |
 | `dm` | `{message: DM dict}` |
 | `file_progress` | `{transfer_id, received, size, direction}` |
@@ -185,12 +192,13 @@ and `on_packet` before dispatch. Coordinate every change with Lương.
 
 ## Per-owner scope and done criteria
 
-### Auth
+### Auth (auth + web UI lead)
 
-- `app/auth.py`, hashed user store, no plaintext
-- tests: valid, wrong password, unknown user, hash format
-- remove `--dev-auth` from the real run command when done
-- then `web/login.js` + login form wiring
+- `app/auth.py`: done (PBKDF2, hashed store, admin tool)
+- web shell: `web/index.html`, `web/app.js`, `web/style.css`
+- login page: `web/login.js`, uses `POST /api/login` and `GET /api/state`
+- read `docs/gateway-api.md` before touching the UI
+- chat/files add their own modules; coordinate any `web/app.js` change with Auth
 
 ### Crypto
 
@@ -217,11 +225,12 @@ and `on_packet` before dispatch. Coordinate every change with Lương.
 
 ### Integration/UI (Lương)
 
-- `client/daemon.py` baseline: login, `peers`, chat events, `state()`, `send_chat`
-- `client/gateway.py`: `GET /`, `GET /events`, `POST /api/login`,
-  `POST /api/chat`, `GET /api/state` (DM/file endpoints later)
-- `web/index.html`, `web/app.js`, `web/style.css` shell
+- `client/daemon.py`: done (login, `peers`, chat events, `state()`, `send_chat`)
+- `client/gateway.py`: done (`GET /`, `GET /events`, `POST /api/login`,
+  `POST /api/chat`, `GET /api/state`)
+- `web/`: hand off to Auth (UI lead); placeholder page only
 - multi-client stress test (10–20)
+- gateway changes (new routes/events) stay with Lương
 
 ### Transport/tracker (Lương)
 
@@ -242,10 +251,9 @@ and `on_packet` before dispatch. Coordinate every change with Lương.
 
 ## Integration order
 
-1. `app/auth.py` → tracker starts using it (no code change needed on the
-   tracker side; `TrackerServer` already calls `authenticate`).
-2. `client/daemon.py` baseline → unblocks chat/files/UI.
-3. `client/gateway.py` + web shell → UI pages can be added per owner.
+1. `app/auth.py` → done; tracker uses it.
+2. `client/daemon.py` baseline → done; unblocks chat/files/UI.
+3. `client/gateway.py` + HTTP/SSE → done; web pages are next.
 4. `app/files.py` + file UI → depends on daemon and streams.
 5. `transport/crypto.py` → integration after the rest works, so failures are
    isolated. Crypto is still required for the security rubric point.
@@ -266,16 +274,17 @@ python3 scripts/stream_udp_demo.py --bytes 50000 --loss 0.2 --seed 3
 python3 scripts/multistream_demo.py --bytes 500000
 python3 scripts/ping_pong_demo.py
 
-# pure app checks
-python3 scripts/tracker_state_demo.py
-python3 scripts/messages_demo.py
+# client daemon + gateway
+python3 scripts/gateway_demo.py
 ```
 
-Client process (planned, integration owner):
+Client process (daemon + gateway):
 
 ```bash
 python3 -m client.daemon --tracker 127.0.0.1:6767 --username alice
-# starts the HTTP/SSE gateway on localhost for web/
+# opens the HTTP/SSE gateway on http://127.0.0.1:8080/
+# omit --username to log in through the web UI instead
+# --no-gateway runs the daemon alone and prints events
 ```
 
 ## Known non-goals for this milestone

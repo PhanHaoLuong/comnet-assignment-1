@@ -34,7 +34,7 @@ What auth must **not** do:
 
 What auth **should** do:
 
-- store salted hashes (scrypt or PBKDF2), never plaintext
+- store salted PBKDF2-HMAC-SHA256 hashes (600k iterations), never plaintext
 - run the CPU-heavy hash in `asyncio.to_thread` / `run_in_executor` so the
   event loop is not blocked
 - use the same generic failure for unknown user and wrong password
