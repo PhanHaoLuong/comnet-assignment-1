@@ -8,7 +8,9 @@ from typing import Final
 VERSION: Final = 1
 HEADER_SIZE: Final = 19
 MAX_DATAGRAM: Final = 1200
-MAX_PAYLOAD: Final = MAX_DATAGRAM - HEADER_SIZE
+MAX_PAYLOAD: Final = MAX_DATAGRAM - HEADER_SIZE   # wire payload cap (ciphertext)
+CRYPTO_TAG_LEN: Final = 16                        # AES-GCM tag
+MAX_STREAM_PAYLOAD: Final = MAX_PAYLOAD - CRYPTO_TAG_LEN  # plaintext fragment cap
 HEADER: Final = struct.Struct("!BBBIIHIH")
 
 # --- accounts / auth -------------------------------------------------------

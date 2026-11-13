@@ -1,8 +1,30 @@
-"""Level 1 transport encryption: X25519 key exchange, HKDF-SHA256, AES-256-GCM."""
+"""Level 1 transport encryption: X25519 key exchange, HKDF-SHA256, AES-256-GCM.
+
+Handshake
+    HELLO / HELLO_ACK carry a fresh X25519 public key (32 B) and a random
+    16 B handshake nonce per side.  Both are public; the private key never
+    leaves the process.
+
+Derivation
+    shared     = X25519(own_priv, peer_pub)
+    salt       = initiator_nonce || responder_nonce
+    okm        = HKDF-SHA256(shared, salt, info=b"p2p-miniquic-v1-session-keys",
+                             length=64)
+    init->resp = okm[:32],  resp->init = okm[32:]
+    Each side uses one key for tx and the other for rx.
+
+Packet protection
+    AES-256-GCM with a 12 B nonce: role byte || 7 zero bytes || pkt_num
+    (big-endian 32-bit).  The final 19 B packet header is the AAD, so the
+    receiver must rebuild exactly that header.  pkt_num must strictly
+    increase per sender and is never reused; seq must not be used because
+    retransmissions keep the same seq.
+
+The context is not thread-safe; the transport calls it from one event loop.
+"""
 
 import os
 import struct
-from threading import Lock
 from typing import Optional, Tuple
 
 from cryptography.exceptions import InvalidSignature, InvalidTag
@@ -11,9 +33,11 @@ from cryptography.hazmat.primitives.asymmetric import ed25519, x25519
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 
+from common.constants import CRYPTO_TAG_LEN, HEADER_SIZE
+
 KEY_LEN = 32
 NONCE_LEN = 12
-TAG_LEN = 16
+TAG_LEN = CRYPTO_TAG_LEN
 HANDSHAKE_NONCE_LEN = 16
 REPLAY_WINDOW_SIZE = 64
 
@@ -54,8 +78,14 @@ def derive_session_keys(
     is_initiator: bool,
 ) -> Tuple[bytes, bytes]:
     """Derive directional (tx_key, rx_key) via X25519 + HKDF-SHA256."""
-    peer_pub = x25519.X25519PublicKey.from_public_bytes(peer_pub_bytes)
-    shared_secret = own_priv.exchange(peer_pub)
+    try:
+        peer_pub = x25519.X25519PublicKey.from_public_bytes(peer_pub_bytes)
+        shared_secret = own_priv.exchange(peer_pub)
+    except ValueError as exc:
+        # Wrong length is checked by the caller; this catches low-order /
+        # otherwise invalid points, which cryptography rejects.
+        raise CryptoError(f"invalid X25519 peer public key: {exc}") from exc
+
     salt = init_nonce + resp_nonce
 
     key_material = HKDF(
@@ -73,19 +103,39 @@ def derive_session_keys(
 class CryptoContext:
     """Per-connection Level 1 cryptographic state + pkt_num replay window."""
 
-    def __init__(self, is_initiator: bool, window_size: int = REPLAY_WINDOW_SIZE):
+    def __init__(self, is_initiator: bool, *,
+                 private_key: Optional[x25519.X25519PrivateKey] = None,
+                 local_nonce: Optional[bytes] = None,
+                 window_size: int = REPLAY_WINDOW_SIZE):
+        if window_size <= 0:
+            raise ValueError("window_size must be positive")
+
         self.is_initiator = is_initiator
         self.tx_role = ROLE_INITIATOR if is_initiator else ROLE_RESPONDER
         self.rx_role = ROLE_RESPONDER if is_initiator else ROLE_INITIATOR
 
-        self._priv_key, self.public_bytes = generate_ephemeral_keypair()
-        self.local_nonce: bytes = os.urandom(HANDSHAKE_NONCE_LEN)
+        if private_key is None:
+            self._priv_key, self.public_bytes = generate_ephemeral_keypair()
+        else:
+            self._priv_key = private_key
+            self.public_bytes = private_key.public_key().public_bytes(
+                encoding=serialization.Encoding.Raw,
+                format=serialization.PublicFormat.Raw,
+            )
+
+        if local_nonce is None:
+            self.local_nonce: bytes = os.urandom(HANDSHAKE_NONCE_LEN)
+        else:
+            if len(local_nonce) != HANDSHAKE_NONCE_LEN:
+                raise ValueError(
+                    f"local_nonce must be {HANDSHAKE_NONCE_LEN} bytes"
+                )
+            self.local_nonce = local_nonce
 
         self.send_key: bytes = b""
         self.recv_key: bytes = b""
         self._tx_cipher: Optional[AESGCM] = None
         self._rx_cipher: Optional[AESGCM] = None
-        self._tx_lock = Lock()
         self._last_tx_pkt_num = -1
 
         # Sliding replay window state
@@ -99,6 +149,8 @@ class CryptoContext:
 
     def establish(self, peer_pub_bytes: bytes, peer_nonce: bytes) -> None:
         """Complete X25519 key agreement using exchanged public keys and nonces."""
+        if self.is_established:
+            raise CryptoError("session keys are already established")
         if len(peer_pub_bytes) != KEY_LEN:
             raise CryptoError(f"Expected {KEY_LEN}B peer public key, got {len(peer_pub_bytes)}")
         if len(peer_nonce) != HANDSHAKE_NONCE_LEN:
@@ -143,23 +195,30 @@ class CryptoContext:
         """Encrypt using the 19B header as AAD; pkt_num must strictly increase."""
         if self._tx_cipher is None:
             raise RuntimeError("CryptoContext keys not established")
-        nonce = build_nonce(self.tx_role, pkt_num)
-        with self._tx_lock:
-            if pkt_num <= self._last_tx_pkt_num:
-                raise CryptoError(
-                    f"Transmit pkt_num must increase; got {pkt_num} after "
-                    f"{self._last_tx_pkt_num}"
-                )
-            ciphertext = self._tx_cipher.encrypt(
-                nonce, payload, associated_data=header
+        if len(header) != HEADER_SIZE:
+            raise CryptoError(
+                f"header/AAD must be {HEADER_SIZE} bytes, got {len(header)}"
             )
-            self._last_tx_pkt_num = pkt_num
-            return ciphertext
+        nonce = build_nonce(self.tx_role, pkt_num)
+        if pkt_num <= self._last_tx_pkt_num:
+            raise CryptoError(
+                f"Transmit pkt_num must increase; got {pkt_num} after "
+                f"{self._last_tx_pkt_num}"
+            )
+        ciphertext = self._tx_cipher.encrypt(
+            nonce, payload, associated_data=header
+        )
+        self._last_tx_pkt_num = pkt_num
+        return ciphertext
 
     def decrypt(self, pkt_num: int, header: bytes, payload: bytes) -> bytes:
         """Verify replay window, decrypt payload, and authenticate 19B header AAD."""
         if self._rx_cipher is None:
             raise RuntimeError("CryptoContext keys not established")
+        if len(header) != HEADER_SIZE:
+            raise CryptoError(
+                f"header/AAD must be {HEADER_SIZE} bytes, got {len(header)}"
+            )
         self._check_replay(pkt_num)
         nonce = build_nonce(self.rx_role, pkt_num)
         try:
@@ -171,11 +230,21 @@ class CryptoContext:
 
 
 # ---------------------------------------------------------------------------
-# Optional Level 2 Helpers (Ed25519)
+# Level 2 helpers (optional, NOT wired into the handshake yet)
 # ---------------------------------------------------------------------------
 
 class IdentitySigner:
-    """Optional Level 2 Ed25519 identity keypair helper."""
+    """Ed25519 long-term identity key for signed-identity authentication.
+
+    Level 1 encrypts but does not authenticate: an active on-path attacker can
+    run one X25519 handshake with each side and relay. Level 2 gives each user
+    a long-term Ed25519 key and signs the handshake transcript, so each side
+    can verify it is talking to the expected peer.
+
+    Wiring is intentionally not done here. It needs a canonical transcript,
+    a trust model (pinned keys, TOFU, or identity_pub published by the
+    tracker) and a HELLO/HELLO_ACK format change. See docs/crypto.md.
+    """
 
     def __init__(self, priv_key: Optional[ed25519.Ed25519PrivateKey] = None):
         self.priv_key = priv_key or ed25519.Ed25519PrivateKey.generate()
@@ -195,3 +264,4 @@ class IdentitySigner:
             return True
         except (InvalidSignature, ValueError):
             return False
+

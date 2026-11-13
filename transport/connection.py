@@ -19,10 +19,13 @@ No app code should touch HELLO/ACK/seq/pkt_num directly.
 import asyncio
 import logging
 import random
+from dataclasses import replace
 from enum import Enum
 from typing import Callable, Optional
 
 from common.constants import (
+    HEADER,
+    HEADER_SIZE,
     HELLO,
     HELLO_ACK,
     HELLO_RETRY_COUNT,
@@ -30,11 +33,23 @@ from common.constants import (
     PEER_DEAD_S,
     PING_INTERVAL_S,
     PING_TOKEN,
+    VERSION,
     Flags,
     PacketType,
 )
 from common.net import Addr, UdpEndpoint
 from common.packet import Packet, PacketError, decode, encode
+
+try:
+    from transport.crypto import TAG_LEN, CryptoContext, CryptoError
+except ModuleNotFoundError as exc:          # pragma: no cover - install hint
+    if exc.name == "cryptography":
+        raise ImportError(
+            "transport encryption requires the 'cryptography' package; "
+            "run: python3 -m pip install -r requirements.txt"
+        ) from exc
+    raise
+
 from transport.stream import Stream, pack_ack
 
 logger = logging.getLogger(__name__)
@@ -42,16 +57,16 @@ logger = logging.getLogger(__name__)
 CONTROL_STREAM_ID = 0
 
 
-def parse_hello(payload: bytes) -> tuple[int, str]:
-    """Return (sender_conn_id, username) or raise ValueError."""
+def parse_hello(payload: bytes) -> tuple[int, str, bytes, bytes]:
+    """Return (sender_conn_id, username, eph_pub, nonce) or raise ValueError."""
     if len(payload) < HELLO.size:
         raise ValueError("short HELLO payload")
-    sender_id, _eph, _nonce, name_len = HELLO.unpack_from(payload)
+    sender_id, eph_pub, nonce, name_len = HELLO.unpack_from(payload)
     if sender_id == 0:
         raise ValueError("HELLO sender_conn_id is 0")
     if len(payload) != HELLO.size + name_len:
         raise ValueError("HELLO name_len does not match payload")
-    return sender_id, payload[HELLO.size:].decode("utf-8")
+    return sender_id, payload[HELLO.size:].decode("utf-8"), eph_pub, nonce
 
 
 class ConnectionState(Enum):
@@ -72,6 +87,7 @@ class Connection:
         self.peer_conn_id = None               # their local ID; we put it in headers
         self.is_initiator = is_initiator
         self.next_pkt_num = 0
+        self.crypto = CryptoContext(is_initiator=is_initiator)
         self.loop = asyncio.get_running_loop()
         self.state = ConnectionState.NEW
         self._established = None
@@ -197,7 +213,13 @@ class Connection:
         self._established = asyncio.get_running_loop().create_future()
         name_b = name.encode("utf-8")
         payload = (
-            HELLO.pack(self.conn_id, b"\0" * 32, b"\0" * 16, len(name_b)) + name_b
+            HELLO.pack(
+                self.conn_id,
+                self.crypto.public_bytes,
+                self.crypto.local_nonce,
+                len(name_b),
+            )
+            + name_b
         )
         for _ in range(HELLO_RETRY_COUNT):
             self._transmit(PacketType.HELLO, payload, conn_id=0)
@@ -217,15 +239,29 @@ class Connection:
         )
 
     def accept(self, pkt: Packet) -> None:
-        sender_id, name = parse_hello(pkt.payload)
+        sender_id, name, peer_eph, peer_nonce = parse_hello(pkt.payload)
         self.peer_conn_id = sender_id
         self.peer_name = name
+
+        # A duplicate HELLO only re-sends the ACK; it must never re-key an
+        # established connection (a spoofed HELLO would desync the peer).
+        if not self.crypto.is_established:
+            try:
+                self.crypto.establish(peer_eph, peer_nonce)
+            except CryptoError as exc:
+                logger.debug("crypto handshake failed with %s: %s",
+                             self.peer_addr, exc)
+                self.close()
+                return
+
         self.state = ConnectionState.ESTABLISHED
         self._setup_control_stream()
         self._start_keepalive()
         self._transmit(
             PacketType.HELLO_ACK,
-            HELLO_ACK.pack(self.conn_id, b"\x00" * 32, b"\x00" * 16),
+            HELLO_ACK.pack(
+                self.conn_id, self.crypto.public_bytes, self.crypto.local_nonce
+            ),
             conn_id=sender_id,
         )
 
@@ -238,6 +274,29 @@ class Connection:
             return
 
         if self.state is ConnectionState.ESTABLISHED:
+            if pkt.type in (PacketType.HELLO, PacketType.HELLO_ACK):
+                return
+
+            # After the handshake every packet must be encrypted. Deciding by
+            # the ENC flag alone would let an attacker clear it and inject
+            # plaintext, so plaintext is rejected outright.
+            if self.crypto.is_established:
+                if not pkt.flags & Flags.ENC:
+                    logger.debug(
+                        "dropping unencrypted %s from %s", pkt.type, self.peer_addr
+                    )
+                    return
+                try:
+                    plaintext = self.crypto.decrypt(
+                        pkt.pkt_num, self._header_bytes(pkt), pkt.payload
+                    )
+                except CryptoError as exc:
+                    logger.debug(
+                        "dropping %s from %s: %s", pkt.type, self.peer_addr, exc
+                    )
+                    return
+                pkt = replace(pkt, payload=plaintext)
+
             self.last_seen = self.loop.time()
 
             if pkt.type == PacketType.PING:
@@ -265,9 +324,21 @@ class Connection:
     def _handle_hello_ack(self, pkt: Packet) -> None:
         if pkt.conn_id != self.conn_id or len(pkt.payload) < HELLO_ACK.size:
             return
-        sender_id, _eph, _nonce = HELLO_ACK.unpack_from(pkt.payload)
+        sender_id, peer_eph, peer_nonce = HELLO_ACK.unpack_from(pkt.payload)
         if sender_id == 0:
             return
+
+        if not self.crypto.is_established:
+            try:
+                self.crypto.establish(peer_eph, peer_nonce)
+            except CryptoError as exc:
+                logger.debug("crypto handshake failed with %s: %s",
+                             self.peer_addr, exc)
+                if self._established is not None and not self._established.done():
+                    self._established.set_exception(exc)
+                self.close()
+                return
+
         self.peer_conn_id = sender_id
         self.state = ConnectionState.ESTABLISHED
         if self._established is not None and not self._established.done():
@@ -310,6 +381,20 @@ class Connection:
 
     # -- packet construction ------------------------------------------------
 
+    @staticmethod
+    def _header_bytes(pkt: Packet) -> bytes:
+        """Rebuild the exact 19-byte header received, for use as AAD."""
+        return HEADER.pack(
+            pkt.version,
+            pkt.type,
+            pkt.flags,
+            pkt.conn_id,
+            pkt.pkt_num,
+            pkt.stream_id,
+            pkt.seq,
+            pkt.length,
+        )
+
     def _transmit(self, type_: PacketType, payload: bytes = b"", conn_id=None,
                   stream_id: int = 0, seq: int = 0, flags: int = 0) -> int:
         if conn_id is None:
@@ -319,6 +404,24 @@ class Connection:
 
         pkt_num = self.next_pkt_num
         self.next_pkt_num += 1
+
+        # HELLO/HELLO_ACK carry the key material, so they stay plaintext.
+        # Everything else is encrypted once keys exist (including PING, ACK
+        # and FIN: plaintext control packets would be injectable).
+        encrypt = (
+            self.crypto.is_established
+            and type_ not in (PacketType.HELLO, PacketType.HELLO_ACK)
+        )
+        if encrypt:
+            flags |= Flags.ENC
+            # The length field covers the ciphertext (plaintext + tag), and
+            # the final header is the AAD, so build it before encrypting.
+            header = HEADER.pack(
+                VERSION, int(type_), int(flags), conn_id, pkt_num,
+                stream_id, seq, len(payload) + TAG_LEN,
+            )
+            payload = self.crypto.encrypt(pkt_num, header, payload)
+
         pkt = Packet(
             type=int(type_),
             conn_id=conn_id,
@@ -328,7 +431,10 @@ class Connection:
             payload=payload,
             flags=flags,
         )
-        self.endpoint.send(encode(pkt), self.peer_addr)
+        wire = encode(pkt)
+        if encrypt and wire[:HEADER_SIZE] != header:
+            raise RuntimeError("encrypted packet header does not match its AAD")
+        self.endpoint.send(wire, self.peer_addr)
         return pkt_num
 
 
@@ -395,12 +501,20 @@ class ConnectionManager:
 
         conn = self.connections.get(pkt.conn_id)
         if conn is not None:
+            if addr != conn.peer_addr:
+                # Bind established connections to the address that created
+                # them; otherwise a guessed conn_id is enough to inject.
+                logger.debug(
+                    "dropping packet for conn %s from unexpected %s",
+                    conn.conn_id, addr,
+                )
+                return
             conn.on_packet(pkt)
             return
 
         if pkt.type == PacketType.HELLO and pkt.conn_id == 0:
             try:
-                sender_id, _name = parse_hello(pkt.payload)
+                sender_id, _name, _eph, _nonce = parse_hello(pkt.payload)
             except (ValueError, UnicodeDecodeError) as exc:
                 logger.debug("dropping bad HELLO from %s: %s", addr, exc)
                 return

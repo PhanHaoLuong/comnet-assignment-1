@@ -6,9 +6,9 @@ from common.constants import (
     ACK_HEAD,
     Flags,
     INITIAL_RTO,
-    MAX_PAYLOAD,
     MAX_RETRANSMITS,
     MAX_SACK_RANGES,
+    MAX_STREAM_PAYLOAD,
     RTO_MAX,
     RTO_MIN,
     SACK_RANGE,
@@ -97,7 +97,8 @@ class Stream:
             raise ConnectionError("stream is closed")
 
         chunks = [
-            msg[i:i + MAX_PAYLOAD] for i in range(0, len(msg), MAX_PAYLOAD)
+            msg[i:i + MAX_STREAM_PAYLOAD]
+            for i in range(0, len(msg), MAX_STREAM_PAYLOAD)
         ] or [b""]
 
         async with self.send_lock:
