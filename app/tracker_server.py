@@ -68,6 +68,11 @@ class TrackerServer:
     # -------------------------------------------------------------- connections
 
     def on_connection(self, conn: Connection) -> None:
+        if conn.control_stream is None:
+            logger.info("ignoring connection from %s without a control stream",
+                        conn.peer_addr)
+            return
+
         session = self.tracker.add(conn)
         session.last_seen = time.monotonic()
         conn.on_close(lambda c: asyncio.create_task(self._drop(session)))

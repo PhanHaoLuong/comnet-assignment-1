@@ -249,8 +249,11 @@ class Connection:
             try:
                 self.crypto.establish(peer_eph, peer_nonce)
             except CryptoError as exc:
-                logger.debug("crypto handshake failed with %s: %s",
-                             self.peer_addr, exc)
+                logger.info(
+                    "rejecting HELLO from %s: crypto handshake failed (%s); "
+                    "peer may be running a pre-crypto build",
+                    self.peer_addr, exc,
+                )
                 self.close()
                 return
 
@@ -533,6 +536,9 @@ class ConnectionManager:
                 self.by_hello[key] = conn
                 self._register(conn)
                 conn.accept(pkt)
-                self.on_connection(conn)
+                # A failed crypto handshake closes the connection; do not
+                # hand a dead session (control_stream is None) to app code.
+                if conn.state is ConnectionState.ESTABLISHED:
+                    self.on_connection(conn)
             else:
                 conn.accept(pkt)      # duplicate HELLO: resend the ACK
