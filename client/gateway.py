@@ -11,7 +11,7 @@ Routes:
     GET  /api/state        current daemon state
     POST /api/login        {username, password}
     POST /api/chat         {text}
-    POST /api/dm           reserved
+    POST /api/dm           {to, text}
     POST /api/file         reserved
 """
 
@@ -25,6 +25,8 @@ from pathlib import Path
 from typing import Optional
 
 from client.daemon import ClientDaemon, LoginError
+from app import messages
+from app.peer import MAX_DM_TEXT_BYTES, PeerError
 
 logger = logging.getLogger(__name__)
 
@@ -41,6 +43,7 @@ REASONS = {
     413: "Payload Too Large",
     500: "Internal Server Error",
     501: "Not Implemented",
+    502: "Bad Gateway",
 }
 
 
@@ -179,7 +182,11 @@ class Gateway:
             await self._chat(writer, body)
             return
 
-        if method == "POST" and path in ("/api/dm", "/api/file"):
+        if method == "POST" and path == "/api/dm":
+            await self._dm(writer, body)
+            return
+
+        if method == "POST" and path == "/api/file":
             await self._json(writer, 501, {"ok": False, "reason": "not_implemented"})
             return
 
@@ -230,6 +237,47 @@ class Gateway:
             return
 
         await self._json(writer, 200, {"ok": True})
+
+    async def _dm(self, writer, body: bytes) -> None:
+        if self.daemon.status != "authenticated":
+            await self._json(writer, 401, {"ok": False, "reason": "not_logged_in"})
+            return
+
+        try:
+            data = self._parse_json(body)
+            to = data["to"]
+            text = data["text"]
+            if not isinstance(to, str) or not isinstance(text, str):
+                raise ValueError
+        except (ValueError, KeyError, TypeError):
+            await self._json(writer, 400, {"ok": False, "reason": "bad_request"})
+            return
+
+        to = to.strip().lower()
+        if not messages.is_valid_username(to):
+            await self._json(writer, 400, {"ok": False, "reason": "bad_username"})
+            return
+        if not text.strip():
+            await self._json(writer, 400, {"ok": False, "reason": "empty_text"})
+            return
+        if len(text.encode("utf-8")) > MAX_DM_TEXT_BYTES:
+            await self._json(writer, 400, {"ok": False, "reason": "text_too_long"})
+            return
+
+        try:
+            await self.daemon.send_dm(to, text)
+        except ValueError as exc:
+            await self._json(writer, 400, {
+                "ok": False, "reason": "bad_text", "detail": str(exc),
+            })
+        except PeerError as exc:
+            status = 404 if exc.code == "peer_offline" else 502
+            await self._json(writer, status, {"ok": False, "reason": exc.code})
+        except RuntimeError:
+            await self._json(writer, 401, {"ok": False, "reason": "not_logged_in"})
+        else:
+            # No local echo: the UI renders the outgoing `dm` SSE event.
+            await self._json(writer, 200, {"ok": True})
 
     async def _static(self, path: str, writer) -> None:
         if path == "/":

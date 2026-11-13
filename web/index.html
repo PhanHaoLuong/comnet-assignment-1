@@ -4,13 +4,63 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>P2P Collaboration</title>
+    <link rel="stylesheet" href="style.css">
   </head>
   <body>
-    <h1>P2P Collaboration</h1>
-    <p>Gateway is running. The web UI is under construction.</p>
-    <p>
-      API: <code>/api/state</code>, <code>/api/login</code>,
-      <code>/api/chat</code>, <code>/events</code>
-    </p>
+    <div class="page">
+      <header class="topbar">
+        <div class="brand">
+          <span class="logo">P2P</span>
+          <span class="tagline">local collaboration</span>
+        </div>
+        <div class="who" id="who"></div>
+        <div class="status" id="status" aria-live="polite">
+          <span class="dot"></span><span id="status-text">idle</span>
+        </div>
+      </header>
+
+      <!-- Minimal shell scaffold. Auth owns this file; replace freely. -->
+      <section class="login card" id="login-view">
+        <h1>Sign in</h1>
+        <p class="muted">Log in to see peers and start a direct conversation.</p>
+        <form id="login-form" novalidate>
+          <label>
+            Username
+            <input name="username" autocomplete="username" autocapitalize="none"
+                   spellcheck="false" placeholder="alice" required>
+          </label>
+          <label>
+            Password
+            <input name="password" type="password" autocomplete="current-password"
+                   placeholder="••••••" required>
+          </label>
+          <button type="submit" id="login-button">Log in</button>
+        </form>
+        <p class="error" id="login-error" role="alert"></p>
+      </section>
+
+      <main class="app" id="app-view" hidden>
+        <aside class="card sidebar">
+          <div class="card-head">
+            <h2>Peers</h2>
+            <span class="count" id="peer-count">0</span>
+          </div>
+          <ul class="peer-list" id="peer-list"></ul>
+          <p class="muted empty" id="no-peers">No peers online yet.</p>
+          <p class="hint">Select a peer to open a direct message.</p>
+        </aside>
+
+        <section class="card dm-panel">
+          <!-- web/dm.js owns this subtree. -->
+          <div id="dm-root"></div>
+        </section>
+      </main>
+
+      <p class="error banner" id="app-error" role="alert" hidden></p>
+    </div>
+
+    <script src="login.js"></script>
+    <script src="dm.js"></script>
+    <script src="app.js"></script>
   </body>
 </html>

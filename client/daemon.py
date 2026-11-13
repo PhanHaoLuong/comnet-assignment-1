@@ -1,7 +1,7 @@
-"""Per-user client daemon: tracker connection, login, peers, chat events.
+"""Per-user client daemon: tracker connection, login, peers, chat, direct DMs.
 
-No HTTP, no web code, no DM/files yet. The gateway consumes `events` and calls
-the public methods.
+No HTTP, no web code, no file transfers yet. The gateway consumes `events` and
+calls the public methods.
 
     python3 -m client.daemon --tracker 127.0.0.1:6767 --username alice
 """
@@ -244,6 +244,8 @@ class ClientDaemon:
             "tracker": list(self.tracker_addr),
             "peers": self.peers,
             "history": self.history,
+            "dms": self.peer_service.dm_history()
+            if self.peer_service is not None else {},
         }
 
     async def stop(self) -> None:
