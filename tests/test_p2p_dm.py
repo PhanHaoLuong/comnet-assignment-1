@@ -89,7 +89,7 @@ class TestDirectPeerMessaging(unittest.IsolatedAsyncioTestCase):
         await outsider.listen("127.0.0.1", 0)
         try:
             c = await outsider.connect(self.a.address, "mallory")
-            await until(lambda: c.state.name == "CLOSED", timeout=2)
+            await until(lambda: c.state.name == "CLOSED", timeout=4)
             self.assertNotIn("mallory", self.a.peer_service.connected_peers)
         finally:
             outsider.endpoint.close()

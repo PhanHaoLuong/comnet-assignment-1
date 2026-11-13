@@ -25,6 +25,7 @@ logger = logging.getLogger(__name__)
 MAX_DM_TEXT_BYTES = 4096
 DM_HISTORY_PER_PEER = 100
 DM_HISTORY_TOTAL = 200
+ROSTER_GRACE_S = 2.0
 
 
 class PeerError(RuntimeError):
@@ -96,7 +97,8 @@ class PeerService:
     async def _authorize_incoming(self, conn: Connection, name: str) -> None:
         try:
             entry = None
-            for _ in range(20):  # up to 1 s for PEER_JOINED to reach the daemon
+            attempts = int(ROSTER_GRACE_S / 0.05)
+            for _ in range(attempts):  # allow PEER_JOINED to catch up
                 if self._closed:
                     return
                 entry = self._lookup_peer(name)
@@ -107,13 +109,27 @@ class PeerService:
                 logger.warning("rejecting unknown inbound peer %s", name)
                 conn.close()
                 return
-            # The tracker reports the peer's UDP endpoint.  Require exact
-            # address/port for this simple LAN demo; it is not cryptographic
-            # authentication and does not solve NAT traversal.
-            if tuple(entry.get("addr", ())) != tuple(conn.peer_addr):
-                logger.warning("rejecting inbound peer %s: endpoint mismatch", name)
-                conn.close()
-                return
+
+            # The roster address is a routing hint, not authentication: a
+            # multi-homed or VPN peer can legitimately connect from a different
+            # local address than the one the tracker observed. Level 1 has no
+            # identity proof yet, so log the mismatch instead of dropping the
+            # session. Level 2 will make this check cryptographic.
+            roster = tuple(entry.get("addr", ()))
+            direct = tuple(conn.peer_addr)
+            if len(roster) == 2 and len(direct) == 2:
+                if roster[0] != direct[0]:
+                    logger.warning(
+                        "inbound peer %s connects from %s but the roster says "
+                        "%s; accepting (routing hint only)",
+                        name, direct, roster,
+                    )
+                elif roster[1] != direct[1]:
+                    logger.info(
+                        "inbound peer %s port differs from roster (%s vs %s); "
+                        "accepting", name, direct[1], roster[1],
+                    )
+
             self._attach(name, conn, reader_is_current=True)
             await self._reader(conn, name)
         except asyncio.CancelledError:
@@ -167,6 +183,8 @@ class PeerService:
                         conn = await self.mgr.connect(addr, self.username)
                     except (ConnectionError, OSError) as exc:
                         last_exc = exc
+                        logger.info("direct connect to %s at %s failed: %s",
+                                    to, addr, exc)
                         break
                     if conn.state is not ConnectionState.ESTABLISHED:
                         conn.close()
@@ -178,6 +196,8 @@ class PeerService:
                     await conn.control_stream.send(messages.encode(message))
                 except (ConnectionError, RuntimeError) as exc:
                     last_exc = exc
+                    logger.info("sending DM to %s over %s failed: %s",
+                                to, conn.peer_addr, exc)
                     self._forget(conn, to)
                     conn.close()
                     continue

@@ -83,7 +83,7 @@ if __name__ == "__main__":
     parser.add_argument("--user", required=True)
     parser.add_argument("--tracker", type=parse_addr, default=("127.0.0.1", 6767))
     parser.add_argument("--password", default=None)
-    parser.add_argument("--listen-host", default="127.0.0.1")
+    parser.add_argument("--listen-host", default="0.0.0.0")
     parser.add_argument("--listen-port", type=int, default=0)
     args = parser.parse_args()
     if args.password is None:

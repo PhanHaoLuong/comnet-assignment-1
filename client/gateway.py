@@ -272,7 +272,9 @@ class Gateway:
             })
         except PeerError as exc:
             status = 404 if exc.code == "peer_offline" else 502
-            await self._json(writer, status, {"ok": False, "reason": exc.code})
+            await self._json(writer, status, {
+                "ok": False, "reason": exc.code, "detail": str(exc),
+            })
         except RuntimeError:
             await self._json(writer, 401, {"ok": False, "reason": "not_logged_in"})
         else:

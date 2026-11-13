@@ -74,6 +74,11 @@ class ClientDaemon:
         if self.mgr.endpoint is None:
             await self.mgr.listen(self.listen_host, self.listen_port)
             logger.info("client listening on %s", self.mgr.address)
+            if self.listen_host in ("127.0.0.1", "localhost", "::1"):
+                logger.warning(
+                    "client is bound to loopback only; peers on other devices "
+                    "cannot connect. Use --listen-host 0.0.0.0 for a LAN demo."
+                )
 
     async def login(self, username: str, password: str) -> dict:
         """Connect to the tracker and perform the app-level LOGIN.
@@ -371,7 +376,7 @@ def main() -> None:
                         help="omit to log in through the web UI")
     parser.add_argument("--password",
                         help="omit to be prompted (keeps it out of shell history)")
-    parser.add_argument("--listen-host", default="127.0.0.1")
+    parser.add_argument("--listen-host", default="0.0.0.0")
     parser.add_argument("--listen-port", type=int, default=0)
     parser.add_argument("--gateway-host", default="127.0.0.1")
     parser.add_argument("--gateway-port", type=int, default=8080)
