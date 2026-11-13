@@ -19,6 +19,8 @@ from app import messages
 from common.constants import PEER_DEAD_S, PING_INTERVAL_S
 from transport.connection import Connection, ConnectionManager
 
+from app.peer import PeerService
+
 logger = logging.getLogger(__name__)
 
 
@@ -58,6 +60,8 @@ class ClientDaemon:
 
         self._read_task: Optional[asyncio.Task] = None
         self._stopping = False
+
+        self.peer_service: Optional[PeerService] = None
 
     # ------------------------------------------------------------------ setup
 
@@ -125,6 +129,10 @@ class ClientDaemon:
             raise LoginError("unexpected_reply")
 
         self.username = name
+        self.peer_service = PeerService(
+            self.mgr, name, lookup_peer=lambda peer: self.peers.get(peer),
+            emit=self._emit,
+        )
         self.history = list(reply["history"])[-self.history_limit:]
         self.peers = {peer["username"]: peer for peer in reply["peers"]}
         await self._set_status("authenticated", error=None)
@@ -164,6 +172,9 @@ class ClientDaemon:
 
         elif kind == "PEER_LEFT":
             self.peers.pop(msg["username"], None)
+            if self.peer_service is not None:
+                self.peer_service.peer_left(msg["username"])
+
             await self._emit({"kind": "peers", "peers": self.peers})
 
         elif kind == "CHAT":
@@ -197,6 +208,13 @@ class ClientDaemon:
             messages.make("CHAT_SEND", text=text)
         ))
 
+    async def send_dm(self, to: str, text: str) -> dict:
+        """Send a direct plaintext DM; networking is delegated to app.peer."""
+        if self.status != "authenticated" or self.peer_service is None:
+            raise RuntimeError("not logged in")
+        return await self.peer_service.send_dm(to, text)
+
+
     def state(self) -> dict:
         return {
             "status": self.status,
@@ -215,6 +233,10 @@ class ClientDaemon:
             self._read_task.cancel()
             await asyncio.gather(self._read_task, return_exceptions=True)
             self._read_task = None
+
+        if self.peer_service is not None:
+            await self.peer_service.stop()
+            self.peer_service = None
 
         if self.tracker is not None:
             self.tracker.close()
@@ -248,6 +270,11 @@ class ClientDaemon:
         if self._stopping or self.status == "disconnected":
             return
         self.tracker = None
+
+        if self.peer_service is not None:
+            await self.peer_service.stop()
+            self.peer_service = None
+
         await self._set_status("disconnected", error="tracker closed")
 
     def _on_tracker_stream(self, stream) -> None:
@@ -255,9 +282,11 @@ class ClientDaemon:
         logger.debug("tracker opened stream %s", stream.stream_id)
 
     def _on_peer_connection(self, conn: Connection) -> None:
-        # DM/file sessions are not implemented yet. Reject cleanly.
-        logger.info("rejecting inbound peer %s (not supported yet)", conn.peer_addr)
-        conn.close()
+        # DM/file sessions are implemented. 
+        if self.peer_service is None or self.status != "authenticated":
+            conn.close()
+            return
+        self.peer_service.accept_incoming(conn)
 
 
 # ------------------------------------------------------------------------ CLI
