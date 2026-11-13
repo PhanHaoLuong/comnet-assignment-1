@@ -43,10 +43,16 @@ Serves `web/` from the repo root. Missing files → 404 JSON.
     "username": null,
     "tracker": ["127.0.0.1", 6767],
     "peers": {},
-    "history": []
+    "history": [],
+    "dms": {}
   }
 }
 ```
+
+`dms` is the daemon's in-memory direct-message log, keyed by peer username:
+`{"bob": [{id, t, from, to, text, ts, direction}, ...]}`. It is capped at 100
+messages per peer / 200 total and is **not persisted**. On SSE reconnect the
+initial `state` event re-renders it; a daemon restart loses it.
 
 `status`: `idle`, `connecting`, `authenticated`, `disconnected`, `error`.
 
@@ -89,6 +95,12 @@ Possible reasons: `bad_credentials`, `name_taken`, `bad_username`,
 The username is lowercased by the daemon; the password is sent through the
 transport (Level 1 encryption will protect it later).
 
+**Retry behavior:** a `401` does **not** close the tracker session. Calling
+`POST /api/login` again reuses the same session, so the tracker's 3-attempt
+counter applies. After the third failure the tracker closes the connection;
+the next login attempt reconnects with a fresh session. Keep the login form
+visible after a `401`.
+
 ### `POST /api/chat`
 
 Request:
@@ -101,6 +113,28 @@ Success `200`: `{"ok": true}`.
 Errors: `401 not_logged_in`, `400 empty_text` / `bad_request`.
 
 There is **no local echo**: the message arrives back as a `chat` SSE event.
+
+### `POST /api/dm`
+
+Request:
+
+```json
+{"to": "bob", "text": "hello"}
+```
+
+Success `200`: `{"ok": true}`. The sender's UI must render the outgoing `dm`
+SSE event; there is **no local echo**.
+
+Errors:
+
+- `401 not_logged_in`
+- `400 bad_request`, `empty_text`, `bad_username`, `text_too_long` (4096 bytes)
+- `404 peer_offline`
+- `502 peer_unreachable`, `send_failed`
+
+DM is direct peer-to-peer over UDP, not through the tracker. The peer must be
+online and reachable at the address in `state.peers`; LAN/VPN only. There is no
+delivery ack, retry queue, or offline delivery.
 
 ### `GET /events` (SSE)
 
@@ -128,7 +162,7 @@ Then daemon events, one JSON object per `data:` line:
 | `peers` | `{peers: {username: peer}}` |
 | `history` | `{history: [{gseq, from, text, ts}]}` |
 | `chat` | `{message: {t, id, gseq, from, text, ts}}` |
-| `dm` | `{message: {...}}` (later) |
+| `dm` | `{direction: "incoming"\|"outgoing", message: {t, id, from, to, text, ts}}` |
 | `error` | `{code, text}` |
 
 Example:
@@ -148,7 +182,7 @@ A comment heartbeat is sent every 15 s:
 `EventSource` reconnects automatically; each reconnect starts with a fresh
 `state` event. Re-render from that state and the chat history.
 
-### `POST /api/dm`, `POST /api/file`
+### `POST /api/file`
 
 Reserved; currently `501 {"ok":false,"reason":"not_implemented"}`.
 
@@ -194,6 +228,7 @@ await fetch("/api/chat", {
 | `web/login.js` | Auth |
 | `web/chat.js` | Chat |
 | `web/files.js` | Files |
+| `web/dm.js` | DM (working skeleton provided; DM owner extends) |
 
 `web/app.js` is the shell/router; chat and files expose an `init`/`render`
 function from their modules and are called by the shell. Do not edit another

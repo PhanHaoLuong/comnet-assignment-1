@@ -14,10 +14,11 @@ file without agreement.
 | `app/tracker.py` | done: roster, presence, `gseq`, history |
 | `app/tracker_server.py` | done: tracker daemon |
 | `app/auth.py` | done: PBKDF2-HMAC-SHA256 |
-| `client/daemon.py` | done: login, peers, chat events, state, stop |
+| `client/daemon.py` | done: login with retry, peers, chat events, state, stop |
 | `client/gateway.py` | done: HTTP/1.1 + SSE bridge |
-| `web/` | placeholder `index.html`; Auth owns the real shell + login page |
-| `app/files.py`, `app/peer.py` | **not started** |
+| `web/` | working skeleton: login, presence, DM; Auth owns the final shell |
+| `app/files.py` | **not started** |
+| `app/peer.py` | done: direct P2P DM sessions; bounded in-memory DM log |
 | `transport/crypto.py` | **not started** |
 
 Useful references:
@@ -42,14 +43,16 @@ shared client code.
 | **Crypto** | `transport/crypto.py` (integration into `connection.py` is reviewed by Lương) |
 | **Chat** | `web/chat.js`, chat-related methods/events in `client/daemon.py` (via integration owner), `app/chat.py` if needed |
 | **Files** | `app/files.py`, `app/peer.py`, `web/files.js` |
+| **DM** | `web/dm.js` (working skeleton provided); DM methods/events in `client/daemon.py` via integration owner |
 
 If `client/daemon.py` + `client/gateway.py` are reassigned, move the whole
 block to one person. Never split that file pair.
 
-The Auth owner now owns the web shell and login page. Chat and Files add
-separate JS modules (`web/chat.js`, `web/files.js`) and coordinate any
-`web/app.js` change with Auth. `client/gateway.py` changes still go through
-Lương.
+The Auth owner now owns the web shell and login page. Chat, DM and Files add
+separate JS modules (`web/chat.js`, `web/dm.js`, `web/files.js`) and coordinate
+any `web/app.js` change with Auth. `client/gateway.py` changes still go through
+Lương. The DM owner owns `web/dm.js`; `app/peer.py` stays Files-owned, so
+coordinate changes there.
 
 ## Shared contracts
 
@@ -143,11 +146,14 @@ One `ClientDaemon` per user process. Gateway/UI must use only this surface:
 
 ```python
 daemon.events            # asyncio.Queue[dict], single consumer (gateway)
-daemon.state() -> dict   # {status, username, peers, history}
+daemon.state() -> dict   # {status, username, peers, history, dms}
 await daemon.send_chat(text)
-await daemon.send_dm(to, text)          # later
+await daemon.send_dm(to, text)          # direct P2P; raises PeerError
 await daemon.send_file(to, path)        # later
 ```
+
+`state()["dms"]` is `{peer: [message, ...]}`, capped at 100 per peer / 200
+total, in memory only. It is the UI's reconnect snapshot; nothing is persisted.
 
 Event kinds:
 
@@ -157,7 +163,7 @@ Event kinds:
 | `peers` | `{peers: {username: info}}` |
 | `history` | `{history: [chat entries]}` |
 | `chat` | `{message: CHAT dict}` |
-| `dm` | `{message: DM dict}` |
+| `dm` | `{direction: "incoming"\|"outgoing", message: DM dict}` |
 | `file_progress` | `{transfer_id, received, size, direction}` |
 | `error` | `{code, text}` |
 
@@ -214,6 +220,16 @@ and `on_packet` before dispatch. Coordinate every change with Lương.
 - order by `gseq`; ignore duplicates on reconnect
 - `client/daemon.py` additions go through integration owner
 
+### DM
+
+- `app/peer.py`: direct P2P sessions, `send_dm`, bounded in-memory log
+- UI: `web/dm.js` working skeleton (login + peers + thread + send); DM owner
+  extends it
+- never locally echo: render the `dm` SSE event with `direction`
+- `state()["dms"]` is the reconnect snapshot; no persistence
+- transport encryption applies; no Level 2 identity, no delivery ack, no
+  offline queue, no multi-device sync (future work)
+
 ### Files
 
 - `app/files.py`: chunking, sha256, temp file + rename, progress
@@ -225,10 +241,11 @@ and `on_packet` before dispatch. Coordinate every change with Lương.
 
 ### Integration/UI (Lương)
 
-- `client/daemon.py`: done (login, `peers`, chat events, `state()`, `send_chat`)
+- `client/daemon.py`: done (login, `peers`, chat events, `state()`, `send_chat`,
+  `send_dm`, `state().dms`)
 - `client/gateway.py`: done (`GET /`, `GET /events`, `POST /api/login`,
-  `POST /api/chat`, `GET /api/state`)
-- `web/`: hand off to Auth (UI lead); placeholder page only
+  `POST /api/chat`, `POST /api/dm`, `GET /api/state`)
+- `web/`: working skeleton (login, presence, DM); Auth owns the final shell
 - multi-client stress test (10–20)
 - gateway changes (new routes/events) stay with Lương
 
@@ -253,11 +270,12 @@ and `on_packet` before dispatch. Coordinate every change with Lương.
 
 1. `app/auth.py` → done; tracker uses it.
 2. `client/daemon.py` baseline → done; unblocks chat/files/UI.
-3. `client/gateway.py` + HTTP/SSE → done; web pages are next.
-4. `app/files.py` + file UI → depends on daemon and streams.
-5. `transport/crypto.py` → integration after the rest works, so failures are
-   isolated. Crypto is still required for the security rubric point.
-6. DM (client peer sessions) after daemon and files primitives.
+3. `client/gateway.py` + HTTP/SSE → done; web skeleton (login, presence, DM)
+   is in place, Auth owns the final shell.
+4. `app/files.py` + file UI → next; peer sessions already exist for DM.
+5. `transport/crypto.py` → done: Level 1 wired and tested.
+6. DM (client peer sessions) → done: direct P2P, bounded in-memory history,
+   `/api/dm`, `web/dm.js` skeleton.
 
 ## How to run what exists
 
@@ -285,6 +303,7 @@ python3 -m client.daemon --tracker 127.0.0.1:6767 --username alice
 # opens the HTTP/SSE gateway on http://127.0.0.1:8080/
 # omit --username to log in through the web UI instead
 # --no-gateway runs the daemon alone and prints events
+# with --username, a failed login exits; omit --username to use the web retry
 ```
 
 ## Known non-goals for this milestone
@@ -295,5 +314,7 @@ python3 -m client.daemon --tracker 127.0.0.1:6767 --username alice
 - account creation UI; auth decides auto-register vs seeded users
 - reconnection/backoff after tracker loss
 - multi-device sessions
+- DM persistence, delivery acks, offline queue
+- multi-device DM sync
 
 Document any of these that you do not finish in the report's "future work".

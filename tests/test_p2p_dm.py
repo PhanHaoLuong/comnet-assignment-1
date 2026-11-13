@@ -4,6 +4,7 @@ import asyncio
 import unittest
 
 from app import messages
+from app.peer import MAX_DM_TEXT_BYTES
 from app.tracker_server import TrackerServer
 from client.daemon import ClientDaemon
 from transport.connection import ConnectionManager
@@ -107,6 +108,37 @@ class TestDirectPeerMessaging(unittest.IsolatedAsyncioTestCase):
         await self.b.stop()
         await until(lambda: "bob" not in self.a.peers)
         await until(lambda: "bob" not in self.a.peer_service.connected_peers)
+
+    async def test_state_contains_both_directions(self):
+        await self.a.send_dm("bob", "state me")
+        await event_of(self.b, lambda e: e.get("kind") == "dm" and e.get("direction") == "incoming")
+
+        sent = self.a.state()["dms"]["bob"]
+        received = self.b.state()["dms"]["alice"]
+        self.assertEqual(sent[-1]["text"], "state me")
+        self.assertEqual(sent[-1]["direction"], "outgoing")
+        self.assertEqual(received[-1]["text"], "state me")
+        self.assertEqual(received[-1]["direction"], "incoming")
+        self.assertEqual(received[-1]["from"], "alice")
+
+    async def test_history_is_bounded_and_deduplicated(self):
+        service = self.a.peer_service
+        for index in range(105):
+            service._append_dm("bob", {
+                "id": f"id-{index}", "text": str(index), "ts": index,
+                "from": "alice", "to": "bob", "direction": "outgoing",
+            })
+        history = service.dm_history()["bob"]
+        self.assertEqual(len(history), 100)
+        self.assertEqual(history[0]["id"], "id-5")
+
+        duplicate = dict(history[-1])
+        self.assertFalse(service._append_dm("bob", duplicate))
+        self.assertEqual(len(service.dm_history()["bob"]), 100)
+
+    async def test_oversized_message_rejected(self):
+        with self.assertRaises(ValueError):
+            await self.a.send_dm("bob", "x" * (MAX_DM_TEXT_BYTES + 1))
 
 
 if __name__ == "__main__":

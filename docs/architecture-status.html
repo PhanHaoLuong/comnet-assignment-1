@@ -1,0 +1,276 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>P2P Collaboration — Architecture &amp; Progress</title>
+<style>
+  :root {
+    --bg: #f6f7f9;
+    --panel: #ffffff;
+    --ink: #1b2430;
+    --muted: #64748b;
+    --line: #cbd5e1;
+    --done-bg: #dcfce7; --done-bd: #16a34a; --done-ink: #14532d;
+    --part-bg: #fef3c7; --part-bd: #d97706; --part-ink: #78350f;
+    --todo-bg: #fee2e2; --todo-bd: #dc2626; --todo-ink: #7f1d1d;
+    --na-bg: #e2e8f0; --na-bd: #94a3b8; --na-ink: #334155;
+    --accent: #2563eb;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0f172a; --panel: #172033; --ink: #e2e8f0; --muted: #94a3b8;
+      --line: #334155;
+      --done-bg: #052e16; --done-bd: #22c55e; --done-ink: #bbf7d0;
+      --part-bg: #451a03; --part-bd: #f59e0b; --part-ink: #fde68a;
+      --todo-bg: #450a0a; --todo-bd: #ef4444; --todo-ink: #fecaca;
+      --na-bg: #1e293b; --na-bd: #64748b; --na-ink: #cbd5e1;
+      --accent: #60a5fa;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 32px 20px 64px;
+    background: var(--bg); color: var(--ink);
+    font: 14px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  }
+  .wrap { max-width: 1080px; margin: 0 auto; }
+  header { margin-bottom: 20px; }
+  h1 { font-size: 24px; margin: 0 0 4px; letter-spacing: -0.02em; }
+  .sub { color: var(--muted); font-size: 13px; }
+  h2 { font-size: 15px; text-transform: uppercase; letter-spacing: 0.08em;
+       color: var(--muted); margin: 34px 0 12px; font-weight: 600; }
+  .legend { display: flex; flex-wrap: wrap; gap: 14px; margin-top: 12px; font-size: 12px; color: var(--muted); }
+  .legend span { display: inline-flex; align-items: center; gap: 6px; }
+  .dot { width: 10px; height: 10px; border-radius: 3px; border: 2px solid; }
+  .dot.done { background: var(--done-bg); border-color: var(--done-bd); }
+  .dot.part { background: var(--part-bg); border-color: var(--part-bd); }
+  .dot.todo { background: var(--todo-bg); border-color: var(--todo-bd); }
+  .dot.na   { background: var(--na-bg);   border-color: var(--na-bd); }
+
+  .summary { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 18px 20px; }
+  .counts { display: flex; gap: 26px; flex-wrap: wrap; margin-bottom: 14px; }
+  .count b { display: block; font-size: 26px; line-height: 1.1; }
+  .count span { font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.06em; }
+  .bar { display: flex; height: 12px; border-radius: 999px; overflow: hidden; border: 1px solid var(--line); }
+  .bar i { display: block; }
+  .bar .b-done { background: var(--done-bd); }
+  .bar .b-part { background: var(--part-bd); }
+  .bar .b-todo { background: var(--todo-bd); }
+  .cap { font-size: 12px; color: var(--muted); margin-top: 8px; }
+
+  /* stacked architecture */
+  .stack { display: flex; flex-direction: column; }
+  .tier {
+    background: var(--panel); border: 1px solid var(--line); border-radius: 12px;
+    padding: 14px 16px 16px; position: relative;
+  }
+  .tier-head { display: flex; align-items: baseline; gap: 10px; margin-bottom: 12px; flex-wrap: wrap; }
+  .tier-head h3 { margin: 0; font-size: 14px; }
+  .tier-head .where { font-size: 11.5px; color: var(--muted); font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+  .boxes { display: grid; grid-template-columns: repeat(auto-fit, minmax(155px, 1fr)); gap: 8px; }
+  .box {
+    border: 1px solid var(--line); border-left-width: 4px; border-radius: 8px;
+    padding: 8px 10px; background: var(--bg); min-height: 58px;
+  }
+  .box .t { font-weight: 600; font-size: 12.5px; display: flex; justify-content: space-between; gap: 6px; align-items: flex-start; }
+  .box .f { font-size: 10.5px; color: var(--muted); font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+            margin-top: 3px; word-break: break-word; }
+  .box.done { border-left-color: var(--done-bd); background: var(--done-bg); }
+  .box.part { border-left-color: var(--part-bd); background: var(--part-bg); }
+  .box.todo { border-left-color: var(--todo-bd); background: var(--todo-bg); }
+  .box.na   { border-left-color: var(--na-bd);   background: var(--na-bg); }
+  .box.done .t, .box.done .f { color: var(--done-ink); }
+  .box.part .t, .box.part .f { color: var(--part-ink); }
+  .box.todo .t, .box.todo .f { color: var(--todo-ink); }
+  .box.na .t, .box.na .f { color: var(--na-ink); }
+  .box .f { opacity: .8; }
+  .pill { font-size: 9.5px; text-transform: uppercase; letter-spacing: .05em; padding: 1px 6px;
+          border-radius: 999px; border: 1px solid currentColor; white-space: nowrap; opacity: .85; }
+
+  .conn { display: flex; align-items: center; justify-content: center; gap: 10px;
+          height: 34px; color: var(--muted); font-size: 11px; }
+  .conn::before, .conn::after { content: ""; width: 1px; height: 100%;
+          background: repeating-linear-gradient(to bottom, var(--line) 0 4px, transparent 4px 8px); }
+  .conn span { border: 1px solid var(--line); background: var(--panel); border-radius: 999px;
+               padding: 2px 10px; white-space: nowrap; }
+
+  /* flows */
+  .flow { background: var(--panel); border: 1px solid var(--line); border-radius: 12px;
+          padding: 14px 16px; margin-bottom: 10px; }
+  .flow h4 { margin: 0 0 10px; font-size: 13px; display: flex; gap: 8px; align-items: center; }
+  .chain { display: flex; flex-wrap: wrap; align-items: stretch; gap: 6px; }
+  .step { border: 1px solid var(--line); border-left-width: 3px; border-radius: 6px;
+          padding: 6px 9px; font-size: 11.5px; background: var(--bg); }
+  .step.done { border-left-color: var(--done-bd); }
+  .step.part { border-left-color: var(--part-bd); }
+  .step.todo { border-left-color: var(--todo-bd); }
+  .step small { display: block; color: var(--muted); font-size: 10px; margin-top: 2px; }
+  .arw { align-self: center; color: var(--muted); font-size: 13px; padding: 0 1px; }
+  .note { font-size: 11.5px; color: var(--muted); margin-top: 8px; }
+
+  ul.blockers { list-style: none; padding: 0; margin: 0; display: grid; gap: 8px; }
+  ul.blockers li { background: var(--panel); border: 1px solid var(--line); border-left: 4px solid var(--accent);
+                   border-radius: 8px; padding: 10px 12px; font-size: 13px; }
+  ul.blockers li b { display: block; margin-bottom: 2px; }
+  code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11.5px; }
+  footer { margin-top: 36px; color: var(--muted); font-size: 11.5px; text-align: center; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <h1>P2P Collaboration — architecture &amp; progress</h1>
+  <div class="sub">Snapshot Fri Nov 13 2026 · verified against the working tree, not just the handoff docs</div>
+  <div class="legend">
+    <span><i class="dot done"></i> Done — implemented and demoed</span>
+    <span><i class="dot part"></i> Partial — half the path exists</span>
+    <span><i class="dot todo"></i> Not started</span>
+    <span><i class="dot na"></i> Documented non-goal</span>
+  </div>
+</header>
+
+<section class="summary">
+  <div class="counts">
+    <div class="count"><b style="color:var(--done-bd)">10</b><span>done</span></div>
+    <div class="count"><b style="color:var(--part-bd)">2</b><span>partial</span></div>
+    <div class="count"><b style="color:var(--todo-bd)">4</b><span>not started</span></div>
+    <div class="count"><b style="color:var(--muted)">0</b><span>in review</span></div>
+  </div>
+  <div class="bar" aria-label="62% done, 12% partial, 26% not started">
+    <i class="b-done" style="width:62%"></i><i class="b-part" style="width:12%"></i><i class="b-todo" style="width:26%"></i>
+  </div>
+  <div class="cap">16 tracked items. Transport, tracker, messages, auth, chat-over-tracker, the gateway, crypto and DM are complete.
+    Every browser surface and all direct P2P (DM/files) paths are not.</div>
+</section>
+
+<h2>Layered architecture</h2>
+<div class="stack">
+
+  <section class="tier">
+    <div class="tier-head"><h3>Browser</h3><span class="where">web/ · HTTP + SSE only, no sockets</span></div>
+    <div class="boxes">
+      <div class="box part"><div class="t"><span>Shell / router</span><span class="pill">partial</span></div><div class="f">index.html · app.js skeleton</div></div>
+      <div class="box part"><div class="t"><span>Login page</span><span class="pill">partial</span></div><div class="f">login.js · keep form after 401</div></div>
+      <div class="box part"><div class="t"><span>Styles</span><span class="pill">partial</span></div><div class="f">style.css skeleton</div></div>
+      <div class="box todo"><div class="t"><span>Chat UI</span><span class="pill">todo</span></div><div class="f">chat.js · no local echo</div></div>
+      <div class="box done"><div class="t"><span>DM UI</span><span class="pill">done</span></div><div class="f">dm.js · thread, send, history</div></div>
+      <div class="box todo"><div class="t"><span>Files UI</span><span class="pill">todo</span></div><div class="f">files.js · picker, progress</div></div>
+    </div>
+  </section>
+
+  <div class="conn"><span>HTTP/1.1 + SSE · 127.0.0.1:8080</span></div>
+
+  <section class="tier">
+    <div class="tier-head"><h3>Gateway</h3><span class="where">client/gateway.py · owner Lương</span></div>
+    <div class="boxes">
+      <div class="box done"><div class="t"><span>Static + state</span><span class="pill">done</span></div><div class="f">GET / · GET /api/state</div></div>
+      <div class="box done"><div class="t"><span>Login</span><span class="pill">done</span></div><div class="f">POST /api/login · 401 retry-safe</div></div>
+      <div class="box done"><div class="t"><span>Chat + SSE</span><span class="pill">done</span></div><div class="f">POST /api/chat · GET /events</div></div>
+      <div class="box done"><div class="t"><span>DM route</span><span class="pill">done</span></div><div class="f">POST /api/dm · state.dms</div></div>
+      <div class="box todo"><div class="t"><span>File route</span><span class="pill">todo</span></div><div class="f">/api/file → 501</div></div>
+    </div>
+  </section>
+
+  <div class="conn"><span>in-process · daemon.events (single consumer)</span></div>
+
+  <section class="tier">
+    <div class="tier-head"><h3>Client daemon</h3><span class="where">client/daemon.py · owner Lương</span></div>
+    <div class="boxes">
+      <div class="box done"><div class="t"><span>Login + retry</span><span class="pill">done</span></div><div class="f">reuses session after 401</div></div>
+      <div class="box done"><div class="t"><span>Peers + chat + state</span><span class="pill">done</span></div><div class="f">PEER_JOINED/LEFT · CHAT · state()</div></div>
+      <div class="box done"><div class="t"><span>send_dm()</span><span class="pill">done</span></div><div class="f">direct P2P · bounded local log</div></div>
+      <div class="box todo"><div class="t"><span>send_file()</span><span class="pill">todo</span></div><div class="f">file_progress shape reserved</div></div>
+      <div class="box done"><div class="t"><span>Inbound peers</span><span class="pill">done</span></div><div class="f">PeerService · roster + addr check</div></div>
+    </div>
+  </section>
+
+  <div class="conn"><span>transport API · UDP · independent streams</span></div>
+
+  <section class="tier">
+    <div class="tier-head"><h3>Transport</h3><span class="where">transport/ · owner Lương, crypto owner</span></div>
+    <div class="boxes">
+      <div class="box done"><div class="t"><span>Connection</span><span class="pill">done</span></div><div class="f">handshake · PING · dead detection</div></div>
+      <div class="box done"><div class="t"><span>Streams</span><span class="pill">done</span></div><div class="f">SACK · RTO · fast retransmit · window</div></div>
+      <div class="box done"><div class="t"><span>Crypto hooks</span><span class="pill">done</span></div><div class="f">ENC + eph fields wired in connection.py</div></div>
+      <div class="box done"><div class="t"><span>Crypto module</span><span class="pill">done</span></div><div class="f">crypto.py · 19 unit tests</div></div>
+      <div class="box na"><div class="t"><span>Congestion control</span><span class="pill">non-goal</span></div><div class="f">AIMD deferred to future work</div></div>
+    </div>
+  </section>
+
+  <div class="conn"><span>UDP</span></div>
+
+  <section class="tier">
+    <div class="tier-head"><h3>Tracker &amp; services</h3><span class="where">app/ · owners Lương, Auth, Files</span></div>
+    <div class="boxes">
+      <div class="box done"><div class="t"><span>Tracker</span><span class="pill">done</span></div><div class="f">roster · presence · gseq · history</div></div>
+      <div class="box done"><div class="t"><span>Auth</span><span class="pill">done</span></div><div class="f">auth.py · PBKDF2-SHA256 600k</div></div>
+      <div class="box done"><div class="t"><span>Messages</span><span class="pill">done</span></div><div class="f">messages.py · all 20 types validated</div></div>
+      <div class="box todo"><div class="t"><span>File transfer</span><span class="pill">todo</span></div><div class="f">files.py · chunk + sha256 + rename</div></div>
+      <div class="box todo"><div class="t"><span>Peer sessions</span><span class="pill">todo</span></div><div class="f">peer.py · DM/file helper</div></div>
+      <div class="box na"><div class="t"><span>Relay / INTRO</span><span class="pill">non-goal</span></div><div class="f">direct P2P from roster addrs</div></div>
+    </div>
+  </section>
+
+</div>
+
+<h2>Runtime paths</h2>
+
+<div class="flow">
+  <h4>Chat <span class="pill" style="color:var(--part-bd)">works · UI missing</span></h4>
+  <div class="chain">
+    <div class="step todo">login.js<small>POST /api/login</small></div><div class="arw">→</div>
+    <div class="step done">gateway<small>login</small></div><div class="arw">→</div>
+    <div class="step done">daemon.login<small>LOGIN</small></div><div class="arw">→</div>
+    <div class="step done">tracker + auth<small>LOGIN_OK</small></div><div class="arw">→</div>
+    <div class="step todo">chat.js<small>POST /api/chat</small></div><div class="arw">→</div>
+    <div class="step done">CHAT_SEND<small>gseq assign</small></div><div class="arw">→</div>
+    <div class="step done">CHAT to all<small>SSE event</small></div><div class="arw">→</div>
+    <div class="step todo">chat.js renders<small>no local echo</small></div>
+  </div>
+  <div class="note">The whole server path is green. Only the two browser ends are missing, so this is the cheapest end-to-end demo win.</div>
+</div>
+
+<div class="flow">
+  <h4>Direct message <span class="pill" style="color:var(--done-bd)">working</span></h4>
+  <div class="chain">
+    <div class="step done">DM UI<small>POST /api/dm</small></div><div class="arw">→</div>
+    <div class="step done">gateway<small>200 / mapped errors</small></div><div class="arw">→</div>
+    <div class="step done">daemon.send_dm<small>2 attempts</small></div><div class="arw">→</div>
+    <div class="step done">direct P2P connect<small>roster addr</small></div><div class="arw">→</div>
+    <div class="step done">DM on stream 0<small>Level 1 encrypted</small></div><div class="arw">→</div>
+    <div class="step done">dm event<small>direction + message</small></div><div class="arw">→</div>
+    <div class="step done">UI renders<small>state.dms on reload</small></div>
+  </div>
+  <div class="note">No tracker change needed: peers already learn each other's addresses from the roster. No persistence, acks, offline queue, or multi-device sync.</div>
+</div>
+
+<div class="flow">
+  <h4>File transfer <span class="pill" style="color:var(--todo-bd)">not started</span></h4>
+  <div class="chain">
+    <div class="step todo">File UI<small>picker, accept</small></div><div class="arw">→</div>
+    <div class="step todo">/api/file<small>501 today</small></div><div class="arw">→</div>
+    <div class="step todo">send_file<small>missing</small></div><div class="arw">→</div>
+    <div class="step todo">FILE_OFFER<small>stream 0</small></div><div class="arw">→</div>
+    <div class="step todo">64 KB chunks<small>new stream</small></div><div class="arw">→</div>
+    <div class="step todo">FILE_END<small>sha256 verify</small></div><div class="arw">→</div>
+    <div class="step todo">FILE_DONE<small>temp + rename</small></div>
+  </div>
+  <div class="note">Schemas and stream fragmentation already exist. The work is app/files.py, app/peer.py, and daemon wiring owned by Lương.</div>
+</div>
+
+<h2>Blockers &amp; critical path</h2>
+<ul class="blockers">
+  <li><b>1 · Web UI is unblocked and highest value</b>Login, state, peers and chat already work through the gateway. Doing the UI first makes the demo presentable even if P2P slips.</li>
+  <li><b>2 · Files are the next P2P step</b>DM sessions exist in app/peer.py. Files need FILE_* dispatch, send_file, inbound stream handling, /api/file and files.js. No tracker change is needed.</li>
+  <li><b>3 · Crypto is wired and tested</b>X25519 + HKDF + AES-GCM run on every post-handshake packet. Install cryptography from requirements.txt; the remaining review is the transport owner's sign-off. Level 1 still has no peer authentication.</li>
+  <li><b>4 · No tracker change needed for P2P</b>tracker.handle does not implement CONNECT_REQ, but direct connections use roster addresses. INTRO/RELAY are documented non-goals.</li>
+  <li><b>5 · Tests are partial</b>tests/test_crypto.py covers the crypto layer; other areas still only have fixtures. The report still needs the 10–20 client stress run and README.</li>
+</ul>
+
+<footer>Source of truth: docs/architecture-status.md · contracts: team-handoff, transport-api, auth-tracker-boundary, gateway-api</footer>
+
+</div>
+</body>
+</html>
