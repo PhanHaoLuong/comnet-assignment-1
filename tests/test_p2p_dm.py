@@ -140,6 +140,36 @@ class TestDirectPeerMessaging(unittest.IsolatedAsyncioTestCase):
         with self.assertRaises(ValueError):
             await self.a.send_dm("bob", "x" * (MAX_DM_TEXT_BYTES + 1))
 
+    async def test_generic_send_to_peer(self):
+        message = messages.make("DM", text="generic primitive", ts=123)
+        await self.a.peer_service.send_to_peer("bob", message)
+        event = await event_of(self.b, lambda e: e.get("kind") == "dm" and
+                               e.get("direction") == "incoming")
+        self.assertEqual(event["message"]["text"], "generic primitive")
+
+    async def test_dm_survives_tracker_loss(self):
+        await self.a.send_dm("bob", "before tracker loss")
+        await event_of(self.b, lambda e: e.get("kind") == "dm" and
+                       e.get("direction") == "incoming")
+
+        # Simulate tracker loss without PEER_LEFT: stop its socket and invoke
+        # the daemons' tracker-gone path. Direct peer sessions must survive.
+        self.server.mgr.endpoint.close()
+        await self.a._on_tracker_gone()
+        await self.b._on_tracker_gone()
+        self.assertEqual(self.a.status, "disconnected")
+        self.assertEqual(self.b.status, "disconnected")
+
+        await self.a.send_dm("bob", "after tracker loss")
+        event = await event_of(self.b, lambda e: e.get("kind") == "dm" and
+                               e.get("direction") == "incoming")
+        self.assertEqual(event["message"]["text"], "after tracker loss")
+
+        await self.b.send_dm("alice", "reverse after loss")
+        event = await event_of(self.a, lambda e: e.get("kind") == "dm" and
+                               e.get("direction") == "incoming")
+        self.assertEqual(event["message"]["text"], "reverse after loss")
+
 
 if __name__ == "__main__":
     unittest.main()

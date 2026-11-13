@@ -229,11 +229,19 @@ and `on_packet` before dispatch. Coordinate every change with Lương.
 - `state()["dms"]` is the reconnect snapshot; no persistence
 - transport encryption applies; no Level 2 identity, no delivery ack, no
   offline queue, no multi-device sync (future work)
+- direct sessions survive tracker loss; chat and new peer discovery still need
+  the tracker. There is no automatic tracker reconnect: log in again.
 
 ### Files
 
 - `app/files.py`: chunking, sha256, temp file + rename, progress
-- `app/peer.py`: peer session helper if needed
+- reuse the peer-session layer in `app/peer.py`:
+  - `register_message_handler(kind, handler)` for `FILE_OFFER`, `FILE_ACCEPT`,
+    `FILE_REJECT`, `FILE_END`, `FILE_DONE`, `FILE_ABORT`
+  - `set_stream_handler(handler)` for inbound chunk streams
+  - `await connection_to(peer)` to open the data stream
+  - `await send_to_peer(peer, message)` for control messages
+  - `touch(conn)` while streaming so the 120 s idle reaper does not close it
 - flow: `FILE_OFFER` (stream 0) → `FILE_ACCEPT` → raw chunks on a new stream →
   `FILE_END` → verify hash → `FILE_DONE`
 - send chunks as separate `Stream.send` messages (~64 KB), never one giant send

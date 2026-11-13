@@ -155,11 +155,16 @@ class ClientDaemon:
             await self._set_status("error", error=f"unexpected {reply['t']}")
             raise LoginError("unexpected_reply")
 
+        if self.peer_service is not None and self.username != name:
+            await self.peer_service.stop()
+            self.peer_service = None
+
         self.username = name
-        self.peer_service = PeerService(
-            self.mgr, name, lookup_peer=lambda peer: self.peers.get(peer),
-            emit=self._emit,
-        )
+        if self.peer_service is None:
+            self.peer_service = PeerService(
+                self.mgr, name, lookup_peer=lambda peer: self.peers.get(peer),
+                emit=self._emit,
+            )
         self.history = list(reply["history"])[-self.history_limit:]
         self.peers = {peer["username"]: peer for peer in reply["peers"]}
         await self._set_status("authenticated", error=None)
@@ -236,8 +241,8 @@ class ClientDaemon:
         ))
 
     async def send_dm(self, to: str, text: str) -> dict:
-        """Send a direct plaintext DM; networking is delegated to app.peer."""
-        if self.status != "authenticated" or self.peer_service is None:
+        """Send a direct DM; works over an existing session after tracker loss."""
+        if self.peer_service is None:
             raise RuntimeError("not logged in")
         return await self.peer_service.send_dm(to, text)
 
@@ -299,11 +304,9 @@ class ClientDaemon:
         if self._stopping or self.status == "disconnected":
             return
         self.tracker = None
-
-        if self.peer_service is not None:
-            await self.peer_service.stop()
-            self.peer_service = None
-
+        # Keep PeerService alive: direct DM/file sessions do not depend on the
+        # tracker once established, and the retained roster still lets us dial
+        # known peers. Chat and new peer discovery do need the tracker.
         await self._set_status("disconnected", error="tracker closed")
 
     def _on_tracker_stream(self, stream) -> None:
@@ -311,8 +314,8 @@ class ClientDaemon:
         logger.debug("tracker opened stream %s", stream.stream_id)
 
     def _on_peer_connection(self, conn: Connection) -> None:
-        # DM/file sessions are implemented. 
-        if self.peer_service is None or self.status != "authenticated":
+        # Direct sessions survive tracker loss; only require a logged-in daemon.
+        if self.peer_service is None:
             conn.close()
             return
         self.peer_service.accept_incoming(conn)

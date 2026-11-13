@@ -134,7 +134,9 @@ Errors:
 
 DM is direct peer-to-peer over UDP, not through the tracker. The peer must be
 online and reachable at the address in `state.peers`; LAN/VPN only. There is no
-delivery ack, retry queue, or offline delivery.
+delivery ack, retry queue, or offline delivery. A direct session can outlive
+the tracker, so `/api/dm` may still work while `state.status` is
+`disconnected`; chat and new peer discovery cannot.
 
 ### `GET /events` (SSE)
 

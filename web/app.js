@@ -77,6 +77,15 @@
     });
   }
 
+  function showDisconnected() {
+    byId("reconnect").hidden = false;
+    showBanner(
+      "Tracker offline. Direct messages with existing peers still work; " +
+      "chat and new peer discovery need a reconnect."
+    );
+    window.LoginView.hide();
+  }
+
   function renderState(state) {
     if (!state) return;
 
@@ -90,8 +99,13 @@
     });
 
     if (state.status === "authenticated") {
+      byId("reconnect").hidden = true;
+      showBanner("");
       window.LoginView.hide();
+    } else if (state.status === "disconnected" && state.username) {
+      showDisconnected();
     } else {
+      byId("reconnect").hidden = true;
       window.LoginView.show(
         state.status === "disconnected"
           ? "Disconnected from the tracker. Log in to reconnect."
@@ -117,9 +131,7 @@
         window.DM.onEvent(data);
       } else if (data.kind === "status") {
         setStatus(data.status, data.error);
-        if (data.status === "disconnected") {
-          window.LoginView.show("Tracker connection lost. Log in to reconnect.");
-        }
+        if (data.status === "disconnected") showDisconnected();
       } else if (data.kind === "error") {
         showBanner(data.text || data.code || "Error");
       }
@@ -138,8 +150,13 @@
         onError: showBanner,
         onSelect: setActivePeer
       });
+      byId("reconnect").addEventListener("click", function () {
+        window.LoginView.show("Log in to reconnect to the tracker.");
+      });
       appStarted = true;
     }
+    byId("reconnect").hidden = true;
+    showBanner("");
     renderState(state);
     connectEvents();
   }

@@ -103,12 +103,15 @@ python3 scripts/gateway_demo.py       # HTTP + SSE
   events; heartbeat comment every 15 s.
 - `daemon.events` is a **single-consumer queue** owned by the gateway; the
   gateway fans out to SSE clients. Do not add a second consumer.
-- `POST /api/dm` and `/api/file` return `501` until implemented.
-- `web/index.html` is a placeholder. Auth owns `web/index.html`,
-  `web/app.js`, `web/style.css`, `web/login.js`; Chat owns `web/chat.js`;
-  Files owns `web/files.js`.
-- Inbound peer connections are currently rejected cleanly in
-  `ClientDaemon._on_peer_connection` until DM/files are implemented.
+- `POST /api/dm` is implemented; `/api/file` still returns `501`.
+- `state()` includes `dms` (per-peer, bounded, in memory). DM sessions and
+  history survive tracker loss; chat and new peer discovery do not. There is no
+  automatic tracker reconnect; log in again.
+- `web/` has a working skeleton (login, presence, DM). Auth owns
+  `web/index.html`, `web/app.js`, `web/style.css`, `web/login.js`; Chat owns
+  `web/chat.js`; Files owns `web/files.js`; the DM owner owns `web/dm.js`.
+- `ClientDaemon._on_peer_connection` accepts inbound peers while a
+  `PeerService` exists, including after tracker loss.
 
 ### Transport facts worth knowing
 

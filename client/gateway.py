@@ -239,7 +239,9 @@ class Gateway:
         await self._json(writer, 200, {"ok": True})
 
     async def _dm(self, writer, body: bytes) -> None:
-        if self.daemon.status != "authenticated":
+        # A direct session can outlive the tracker; require a logged-in daemon,
+        # not necessarily an authenticated tracker connection.
+        if self.daemon.peer_service is None:
             await self._json(writer, 401, {"ok": False, "reason": "not_logged_in"})
             return
 
