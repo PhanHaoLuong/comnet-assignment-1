@@ -17,7 +17,7 @@ from typing import Optional
 
 from app import messages
 from common.constants import PEER_DEAD_S, PING_INTERVAL_S
-from transport.connection import Connection, ConnectionManager
+from transport.connection import Connection, ConnectionManager, ConnectionState
 
 logger = logging.getLogger(__name__)
 
@@ -72,8 +72,12 @@ class ClientDaemon:
             logger.info("client listening on %s", self.mgr.address)
 
     async def login(self, username: str, password: str) -> dict:
-        """Connect to the tracker and perform the app-level LOGIN."""
-        if self.tracker is not None:
+        """Connect to the tracker and perform the app-level LOGIN.
+
+        A failed LOGIN keeps the tracker connection open so the user can retry
+        on the same session. The tracker counts the 3 attempts and closes it.
+        """
+        if self.status == "authenticated":
             raise RuntimeError("already logged in on this daemon")
 
         name = username.strip().lower()
@@ -83,27 +87,45 @@ class ClientDaemon:
         await self.start()
         await self._set_status("connecting", error=None)
 
+        conn = self.tracker
+        if conn is not None and conn.state is not ConnectionState.ESTABLISHED:
+            conn.close()
+            conn = None
+            self.tracker = None
+
+        if conn is None:
+            try:
+                conn = await self.mgr.connect(self.tracker_addr, name)
+            except Exception as exc:
+                await self._set_status("disconnected", error=str(exc))
+                raise LoginError("tracker_unreachable") from exc
+
+            self.tracker = conn
+            conn.on_close(self._on_tracker_close)
+            conn.on_stream(self._on_tracker_stream)
+
         try:
-            conn = await self.mgr.connect(self.tracker_addr, name)
-        except Exception as exc:
-            await self._set_status("disconnected", error=str(exc))
-            raise LoginError("tracker_unreachable") from exc
-
-        self.tracker = conn
-        conn.on_close(self._on_tracker_close)
-        conn.on_stream(self._on_tracker_stream)
-
-        await conn.control_stream.send(messages.encode(
-            messages.make("LOGIN", username=name, password=password)
-        ))
+            await conn.control_stream.send(messages.encode(
+                messages.make("LOGIN", username=name, password=password)
+            ))
+        except (ConnectionError, RuntimeError) as exc:
+            self.tracker = None
+            conn.close()
+            await self._set_status("disconnected", error="connection lost")
+            raise LoginError("connection_lost") from exc
 
         try:
             raw = await asyncio.wait_for(conn.control_stream.recv(), timeout=10)
-        except (asyncio.TimeoutError, ConnectionError) as exc:
+        except asyncio.TimeoutError as exc:
             self.tracker = None
             conn.close()
             await self._set_status("disconnected", error="login timeout")
             raise LoginError("login_timeout") from exc
+        except ConnectionError as exc:
+            self.tracker = None
+            conn.close()
+            await self._set_status("disconnected", error="connection lost")
+            raise LoginError("connection_lost") from exc
 
         try:
             reply = messages.decode(raw)
@@ -114,8 +136,8 @@ class ClientDaemon:
             raise LoginError("bad_reply") from exc
 
         if reply["t"] == "LOGIN_ERR":
-            self.tracker = None
-            conn.close()
+            # Keep the connection: retry on the same session so the tracker's
+            # attempt counter works. After the third failure it closes.
             await self._set_status("error", error=reply["reason"])
             raise LoginError(reply["reason"])
         if reply["t"] != "LOGIN_OK":
@@ -292,8 +314,12 @@ async def _amain(args) -> None:
                 print("logged in:", daemon.state())
             except LoginError as exc:
                 print(f"login failed: {exc.reason}", file=sys.stderr)
-                if gateway is None:
-                    return
+                if gateway is not None:
+                    print(
+                        "start without --username to log in through the web UI",
+                        file=sys.stderr,
+                    )
+                return
 
         if gateway is not None:
             await asyncio.Event().wait()     # run until Ctrl-C

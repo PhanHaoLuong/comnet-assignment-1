@@ -1,0 +1,3 @@
+# Transport encryption (transport/crypto.py) needs this at import time.
+# Verified with Python 3.9.6 and 3.12 on macOS.
+cryptography==50.0.2
