@@ -147,7 +147,8 @@ button.ghost {
   display: grid;
   grid-template-columns: 260px minmax(0, 1fr);
   gap: 8px;
-  min-height: 68vh;
+  height: 68vh;
+  min-height: 420px;
 }
 
 .sidebar { padding: 4px; display: flex; flex-direction: column; min-height: 0; }
@@ -213,8 +214,8 @@ button.ghost {
 .chat-log {
   flex: 1;
   min-height: 240px;
-  max-height: 52vh;
   overflow-y: auto;
+  scrollbar-gutter: stable;
   display: flex;
   flex-direction: column;
   gap: 8px;
@@ -223,8 +224,9 @@ button.ghost {
 }
 .chat-empty { margin: auto; max-width: 320px; text-align: center; color: var(--muted); padding: 40px 10px; }
 .chat-message {
+  align-self: flex-start;
   max-width: 78%;
-  border-radius: 10px;
+  border-radius: 12px;
   padding: 7px 11px;
   background: var(--bubble-in);
 }
@@ -232,12 +234,13 @@ button.ghost {
 .chat-meta {
   display: flex;
   align-items: baseline;
-  justify-content: space-between;
-  gap: 8px;
+  justify-content: flex-start;
+  gap: 6px;
   color: var(--muted);
   font-size: 10.5px;
   margin-bottom: 2px;
 }
+.chat-time::before { content: "· "; }
 .chat-from { font-weight: 600; color: var(--ink); }
 .chat-message.own .chat-from { color: var(--accent); }
 .chat-text { white-space: pre-wrap; overflow-wrap: anywhere; }
@@ -248,7 +251,7 @@ button.ghost {
 
 /* Workspace shell: one card, optional tab strip, then the mounted views.
    These are structural rules only; the visual pass can restyle them freely. */
-.workspace { padding: 8px 12px; display: flex; flex-direction: column; min-height: 0; }
+.workspace { padding: 8px 12px; display: flex; flex-direction: column; min-height: 0; overflow: hidden; }
 .view-tabs { display: flex; gap: 6px; margin-bottom: 12px; }
 .view-tabs .view-tab {
   background: transparent;
@@ -293,8 +296,8 @@ button.ghost {
 .dm-messages {
   flex: 1;
   min-height: 240px;
-  max-height: 52vh;
   overflow-y: auto;
+  scrollbar-gutter: stable;
   display: flex;
   flex-direction: column;
   gap: 8px;
@@ -344,9 +347,9 @@ button.ghost {
 .muted { color: var(--muted); }
 
 @media (max-width: 760px) {
-  .app { grid-template-columns: 1fr; }
+  .app { height: auto; grid-template-columns: 1fr; }
   .sidebar { order: 2; }
-  .workspace { min-height: 60vh; }
+  .workspace { height: 60vh; min-height: 0; }
   .topbar { flex-wrap: wrap; }
   .who { margin-left: 0; }
 }
