@@ -4,6 +4,7 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>P2P Collaboration</title>
+    <link rel="icon" href="data:,">
     <link rel="stylesheet" href="style.css">
   </head>
   <body>
@@ -20,48 +21,68 @@
         </div>
       </header>
 
-      <!-- Minimal shell scaffold. Auth owns this file; replace freely. -->
-      <section class="login card" id="login-view">
-        <h1>Sign in</h1>
+      <!-- Login gate. Owned by login.js; the shell only shows/hides it. -->
+      <section class="login card" id="login-view" aria-labelledby="login-title">
+        <h1 id="login-title">Sign in</h1>
         <p class="muted">Log in to see peers and start a direct conversation.</p>
         <form id="login-form" novalidate>
           <label>
             Username
             <input name="username" autocomplete="username" autocapitalize="none"
-                   spellcheck="false" placeholder="alice" required>
+                   spellcheck="false" placeholder="alice" maxlength="20"
+                   aria-describedby="login-error" required>
           </label>
           <label>
             Password
             <input name="password" type="password" autocomplete="current-password"
-                   placeholder="••••••" required>
+                   placeholder="••••••" aria-describedby="login-error" required>
           </label>
           <button type="submit" id="login-button">Log in</button>
         </form>
         <p class="error" id="login-error" role="alert"></p>
       </section>
 
+      <!-- Workspace shell. Global chat and the DM thread are both views in the
+           right-hand card; the sidebar selects which one is visible. -->
       <main class="app" id="app-view" hidden>
-        <aside class="card sidebar">
+        <aside class="card sidebar" aria-label="Navigation">
           <div class="card-head">
-            <h2>Peers</h2>
-            <span class="count" id="peer-count">0</span>
+            <h2>Global</h2>
           </div>
-          <ul class="peer-list" id="peer-list"></ul>
-          <p class="muted empty" id="no-peers">No peers online yet.</p>
-          <p class="hint">Select a peer to open a direct message.</p>
+          <ul class="peer-list global-list" id="global-list">
+            <li>
+              <button type="button" id="global-chat" class="active">
+                <span class="peer-id"><span class="peer-name">Global chat</span></span>
+              </button>
+            </li>
+          </ul>
+
+          <section class="sidebar-panel peers-panel" aria-labelledby="peers-title">
+            <div class="card-head">
+              <h2 id="peers-title">Peers</h2>
+              <span class="count" id="peer-count">0</span>
+            </div>
+            <ul class="peer-list" id="peer-list"></ul>
+            <p class="muted empty" id="no-peers">No peers online yet.</p>
+          </section>
         </aside>
 
-        <section class="card dm-panel">
-          <!-- web/dm.js owns this subtree. -->
-          <div id="dm-root"></div>
+        <section class="card workspace" id="workspace" aria-label="Workspace">
+          <nav class="view-tabs" id="view-tabs" aria-label="Views" hidden></nav>
+          <div class="view-stack" id="view-stack"></div>
         </section>
       </main>
 
       <p class="error banner" id="app-error" role="alert" hidden></p>
     </div>
 
-    <script src="login.js"></script>
+    <!-- Order matters only for the modules that register at load time:
+         shell-core first, then any view module, then the shell. A module loaded
+         after app.js still mounts, but must seed itself from P2P.store. -->
+    <script src="shell-core.js"></script>
+    <script src="chat.js"></script>
     <script src="dm.js"></script>
+    <script src="login.js"></script>
     <script src="app.js"></script>
   </body>
 </html>

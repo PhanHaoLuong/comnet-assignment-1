@@ -196,13 +196,34 @@ Level 1 rules:
 Integration points in `connection.py`: HELLO/HELLO_ACK construction, `_transmit`,
 and `on_packet` before dispatch. Coordinate every change with Lương.
 
+### 6. Web shell (view modules)
+
+`web/` is split so feature owners no longer edit `app.js`:
+
+- `web/shell-core.js` — `window.P2P`: store, view registry, SSE client
+- `web/app.js` — shell root: auth routing, chrome, bundled view adapters
+- `web/login.js` — login gate (`LoginView.init/show/hide`)
+- `web/chat.js` — global chat view, selected from the sidebar
+- `web/<feature>.js` — one self-registering view per feature
+
+A feature module adds its file and a `<script>` tag in `web/index.html`, then
+calls `P2P.registerView({id, label, tab, mount, setState, setPeers, onEvent, open})`.
+The shell mounts it, adds a tab when a second tabbed view exists, and forwards
+state and SSE events. Views with `tab: false` are selected from the sidebar
+instead (Global chat and DM today). The full contract and a copy-paste example
+are in `web/README.md`.
+
+`web/app.js` still belongs to the Auth/UI owner for chrome and auth changes.
+`client/gateway.py` routes are unchanged.
+
 ## Per-owner scope and done criteria
 
 ### Auth (auth + web UI lead)
 
 - `app/auth.py`: done (PBKDF2, hashed store, admin tool)
-- web shell: `web/index.html`, `web/app.js`, `web/style.css`
+- web shell: `web/index.html`, `web/app.js`, `web/shell-core.js`, `web/style.css`
 - login page: `web/login.js`, uses `POST /api/login` and `GET /api/state`
+- view contract for add-ons: `web/README.md`
 - read `docs/gateway-api.md` before touching the UI
 - chat/files add their own modules; coordinate any `web/app.js` change with Auth
 

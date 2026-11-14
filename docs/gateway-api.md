@@ -226,15 +226,18 @@ await fetch("/api/chat", {
 
 | File | Owner |
 |---|---|
-| `web/index.html`, `web/app.js`, `web/style.css` | Auth (UI lead) |
+| `web/index.html`, `web/app.js`, `web/shell-core.js`, `web/style.css` | Auth (UI lead) |
 | `web/login.js` | Auth |
 | `web/chat.js` | Chat |
 | `web/files.js` | Files |
 | `web/dm.js` | DM (working skeleton provided; DM owner extends) |
+| `web/README.md` | Auth (shell/view contract) |
 
-`web/app.js` is the shell/router; chat and files expose an `init`/`render`
-function from their modules and are called by the shell. Do not edit another
-page's file without coordinating with the owner.
+`web/app.js` is the shell/router. Feature panels are views registered through
+`P2P.registerView(...)` (see `web/README.md`); a feature owner adds its JS file
+and a `<script>` tag, and does not edit `app.js`. Modules that follow the older
+`init`/`setState`/`setPeers`/`onEvent`/`open` shape are adapted automatically.
+Do not edit another page's file without coordinating with the owner.
 
 ## What the UI must not do
 

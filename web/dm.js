@@ -44,7 +44,6 @@
     root.innerHTML =
       '<div class="dm-head">' +
         '<h2>Direct messages</h2>' +
-        '<select id="dm-peer" aria-label="Conversation"></select>' +
       '</div>' +
       '<div class="dm-empty" id="dm-empty">' +
         'Pick an online peer from the list to start a private conversation.' +
@@ -56,6 +55,16 @@
         '</div>' +
         '<div class="dm-messages" id="dm-messages"></div>' +
         '<form class="dm-form" id="dm-form">' +
+          // Placeholder for file transfer: disabled until app/files.py,
+          // ClientDaemon.send_file and POST /api/file exist. Enable it then.
+          '<button type="button" id="dm-attach" class="dm-attach" ' +
+                  'aria-label="Attach a file" title="File transfer coming soon" disabled>' +
+            '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" ' +
+                 'stroke="currentColor" stroke-width="2" stroke-linecap="round" ' +
+                 'stroke-linejoin="round" aria-hidden="true">' +
+              '<path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 1 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/>' +
+            '</svg>' +
+          '</button>' +
           '<input id="dm-input" type="text" maxlength="4096" autocomplete="off" ' +
                  'placeholder="Write a message..." aria-label="Message">' +
           '<button type="submit" id="dm-send">Send</button>' +
@@ -64,28 +73,23 @@
       '</div>';
 
     els = {
-      select: root.querySelector("#dm-peer"),
       empty: root.querySelector("#dm-empty"),
       thread: root.querySelector("#dm-thread"),
       title: root.querySelector("#dm-title"),
       peerStatus: root.querySelector("#dm-peer-status"),
       messages: root.querySelector("#dm-messages"),
       form: root.querySelector("#dm-form"),
+      attach: root.querySelector("#dm-attach"),
       input: root.querySelector("#dm-input"),
       send: root.querySelector("#dm-send"),
       error: root.querySelector("#dm-error")
     };
 
-    els.select.addEventListener("change", function () {
-      open(els.select.value);
-    });
     els.form.addEventListener("submit", send);
-    renderOptions();
   }
 
   function setPeers(nextPeers) {
     peers = nextPeers || {};
-    renderOptions();
     renderThread();
   }
 
@@ -94,7 +98,6 @@
     username = state.username || username;
     dms = state.dms || {};
     if (state.peers) peers = state.peers;
-    renderOptions();
     renderThread();
   }
 
@@ -104,7 +107,6 @@
     delete unread[name];
     markUnread(name, false);
     onSelect(name);
-    renderOptions();
     renderThread();
     els.input.focus();
   }
@@ -124,7 +126,6 @@
       unread[peer] = true;
       markUnread(peer, true);
     }
-    renderOptions();
     if (selected === peer) renderThread();
   }
 
@@ -169,25 +170,6 @@
     }
   }
 
-  function renderOptions() {
-    if (!els.select) return;
-
-    var names = {};
-    Object.keys(peers).forEach(function (name) { names[name] = true; });
-    Object.keys(dms).forEach(function (name) { names[name] = true; });
-    if (selected) names[selected] = true;
-
-    var list = Object.keys(names).sort();
-    els.select.textContent = "";
-    els.select.appendChild(new Option("Select a peer...", ""));
-    list.forEach(function (name) {
-      var suffix = peers[name] ? "" : " (offline)";
-      els.select.appendChild(new Option(name + suffix, name));
-    });
-    els.select.value = selected || "";
-    els.select.disabled = list.length === 0;
-  }
-
   function renderThread() {
     if (!els.thread) return;
 
@@ -199,7 +181,7 @@
 
     els.empty.hidden = true;
     els.thread.hidden = false;
-    els.title.textContent = "@" + selected;
+    els.title.textContent = selected;
     var online = Boolean(peers[selected]);
     els.peerStatus.textContent = online ? "online" : "offline";
     els.peerStatus.className = "muted " + (online ? "is-online" : "is-offline");

@@ -340,6 +340,11 @@ async def _amain(args) -> None:
 
     gateway = None
     if not args.no_gateway:
+        # `python -m client.daemon` runs this file as __main__. Without this
+        # alias, client.gateway imports a second copy of this module and its
+        # LoginError is a different class, so login failures become HTTP 500
+        # instead of the intended 401 + reason.
+        sys.modules.setdefault("client.daemon", sys.modules[__name__])
         from client.gateway import Gateway   # local import avoids a cycle
 
         gateway = Gateway(daemon, host=args.gateway_host, port=args.gateway_port)

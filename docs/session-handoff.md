@@ -36,7 +36,7 @@ was decided in chat and is not fully written down elsewhere.
 | `app/auth.py`, `app/admin.py` | done, PBKDF2 |
 | `client/daemon.py` | done: login with retry, peers, chat, DMs, state |
 | `client/gateway.py` | done: HTTP/1.1 + SSE + `/api/dm` |
-| `web/` | working skeleton: login, presence, DM; Auth owns the final shell |
+| `web/` | modular shell: login gate, `P2P` view registry, DM view; Auth owns final shell |
 | `app/peer.py` | done: direct P2P DM sessions + bounded in-memory log |
 | `app/files.py` | not started |
 | DM client peer sessions | done core; no persistence/acks/multi-device |
@@ -139,10 +139,13 @@ python3 scripts/gateway_demo.py       # HTTP + SSE
 
 ## Next work
 
-1. **Auth/UI**: replace the skeleton `web/index.html`, `app.js`, `style.css`,
-   `login.js` with the real shell; keep the form visible after a `401`. The DM
-   module (`web/dm.js`) already exposes `init/setPeers/setState/onEvent/open`.
-2. **Chat**: `web/chat.js`; consume `chat`/`history` SSE events; no local echo.
+1. **Auth/UI**: build the final visual layer on the modular shell (contract in
+   `web/README.md`): `index.html`, `style.css`, `login.js`; keep the form
+   visible after a `401`. The DM module (`web/dm.js`) already exposes
+   `init/setPeers/setState/onEvent/open` and is mounted by the shell.
+2. **Chat**: done: `web/chat.js` renders global history and live `chat` events
+   in the workspace card, selected from the sidebar; no local echo. Visual
+   pass and backend nits (whitespace, max length) remain.
 3. **Files**: `app/files.py` chunk/hash/temp+rename; file UI; extend
    `app/peer.py` dispatch for `FILE_*`; needs `ClientDaemon.send_file`.
 4. **DM polish**: `web/dm.js` (DM owner), delivery semantics, Level 2 identity;
